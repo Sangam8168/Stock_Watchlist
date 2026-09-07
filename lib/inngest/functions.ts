@@ -188,7 +188,11 @@ export const dispatchWatchlistDigests = inngest.createFunction(
 export const sendUserWatchlistDigest = inngest.createFunction(
     {
         id: 'watchlist-digest-user',
-        concurrency: { limit: 20 },              // at most 20 digests built at once
+        // Capped at 5 to stay inside the Inngest free-plan account limit; raise it
+        // on a paid plan. The two-stage fan-out is what makes this scale — this
+        // number only sets how many digests are built in parallel, and the queue
+        // drains the rest, so a lower value costs latency, never correctness.
+        concurrency: { limit: 5 },
         throttle: { limit: 100, period: '60s' }, // ≤ 100 emails/min (well under Gmail's cap)
         idempotency: 'event.data.userId + "-" + event.data.day',
     },

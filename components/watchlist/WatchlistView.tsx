@@ -18,7 +18,7 @@ import {
   moveToPortfolio,
   returnToWatchlist,
 } from '@/lib/actions/watchlist.actions';
-import { seedDemoWatchlist, simulateSinceYouLeft } from '@/lib/actions/demo.actions';
+import { seedDemoWatchlist, simulateSinceYouLeft, canUseDemoTools } from '@/lib/actions/demo.actions';
 import { CATEGORY_META, fmtPct, fmtMarketCap } from '@/lib/changes/display';
 import SinceYouLeft from '@/components/watchlist/SinceYouLeft';
 import WatchlistRow from '@/components/watchlist/WatchlistRow';
@@ -67,6 +67,7 @@ export default function WatchlistView() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [baselineDone, setBaselineDone] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
+  const [demoTools, setDemoTools] = useState(false);
 
   const load = useCallback(async () => {
     if (!deviceId) return;
@@ -83,6 +84,12 @@ export default function WatchlistView() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Demo helpers seed fabricated data, so they're limited to the accounts in
+  // DEMO_TOOLS_EMAILS. The server action enforces this too — this only hides the UI.
+  useEffect(() => {
+    canUseDemoTools().then(setDemoTools).catch(() => setDemoTools(false));
+  }, []);
 
   // Realtime updates — poll the materialised rows (no provider calls) every 45s.
   useEffect(() => {
@@ -298,15 +305,17 @@ export default function WatchlistView() {
         <SinceYouLeft digest={digest} deviceId={deviceId} onReviewed={load} onItemChange={load} />
       </div>
 
-      <div className="flex flex-wrap gap-3 text-xs text-gray-600 print:hidden">
-        <button onClick={loadDemo} className="rounded border border-gray-700 px-2 py-1 hover:border-gray-500 hover:text-gray-300">
-          Load demo watchlist
-        </button>
-        <button onClick={simulate} className="rounded border border-gray-700 px-2 py-1 hover:border-gray-500 hover:text-gray-300">
-          Simulate &ldquo;while you were away&rdquo;
-        </button>
-        <span className="self-center">— demo helpers; the real feed is driven by the 15-min poll</span>
-      </div>
+      {demoTools && (
+        <div className="flex flex-wrap gap-3 text-xs text-gray-600 print:hidden">
+          <button onClick={loadDemo} className="rounded border border-gray-700 px-2 py-1 hover:border-gray-500 hover:text-gray-300">
+            Load demo watchlist
+          </button>
+          <button onClick={simulate} className="rounded border border-gray-700 px-2 py-1 hover:border-gray-500 hover:text-gray-300">
+            Simulate &ldquo;while you were away&rdquo;
+          </button>
+          <span className="self-center">— demo helpers; the real feed is driven by the 15-min poll</span>
+        </div>
+      )}
 
       <div className="print:hidden"><AddSymbol onAdded={load} /></div>
 

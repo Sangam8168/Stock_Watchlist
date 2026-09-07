@@ -415,7 +415,10 @@ function splitSetUnset(fields: Record<string, unknown>): {
 }
 
 export async function addToWatchlist(input: AddWatchlistInput): Promise<{ ok: boolean; error?: string }> {
-  const user = await requireUser();
+  // Return rather than throw: an expired session is an expected outcome here,
+  // and a thrown server action surfaces to the client as a silent rejection.
+  const user = await getUser();
+  if (!user) return { ok: false, error: 'Your session expired — please sign in again.' };
   const symbol = input.symbol.trim().toUpperCase();
   if (!symbol) return { ok: false, error: 'Symbol required' };
 

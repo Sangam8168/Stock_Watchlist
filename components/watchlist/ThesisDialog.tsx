@@ -83,17 +83,28 @@ export default function ThesisDialog({
     };
 
     startTransition(async () => {
-      const res =
-        mode === 'add'
-          ? await addToWatchlist(payload)
-          : await updateWatchlistItem(symbol, payload);
-      if (res.ok) {
-        toast.success(mode === 'add' ? `${symbol} added with your thesis` : `${symbol} thesis updated`);
-        setOpen(false);
-        onDone?.();
-      } else {
-        const msg = 'error' in res && typeof res.error === 'string' ? res.error : 'Something went wrong';
-        toast.error(msg);
+      try {
+        const res =
+          mode === 'add'
+            ? await addToWatchlist(payload)
+            : await updateWatchlistItem(symbol, payload);
+        if (res.ok) {
+          toast.success(mode === 'add' ? `${symbol} added with your thesis` : `${symbol} thesis updated`);
+          setOpen(false);
+          onDone?.();
+        } else {
+          const msg = 'error' in res && typeof res.error === 'string' ? res.error : 'Something went wrong';
+          toast.error(msg);
+        }
+      } catch (e) {
+        // The action throws rather than returning when the session has expired.
+        // Without this the rejection was swallowed and the dialog just sat there,
+        // which reads as "the button is broken".
+        const msg = e instanceof Error ? e.message : '';
+        toast.error(
+          /auth/i.test(msg) ? 'Your session expired — please sign in again.' : `Could not save ${symbol}`,
+          { description: msg || undefined, duration: 8000 }
+        );
       }
     });
   }

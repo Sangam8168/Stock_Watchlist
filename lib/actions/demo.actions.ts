@@ -23,6 +23,37 @@ async function requireUser(): Promise<string> {
   return session.user.id;
 }
 
+/**
+ * The demo helpers seed fabricated theses and synthetic price history. That's
+ * useful for showing the engine working outside market hours, but it must not
+ * be reachable by ordinary visitors — so it's limited to the accounts listed in
+ * DEMO_TOOLS_EMAILS (comma-separated). Unset means nobody sees them.
+ *
+ * Kept in an env var rather than hardcoded: the repo is public.
+ */
+function allowedDemoEmails(): string[] {
+  return (process.env.DEMO_TOOLS_EMAILS ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** Whether the signed-in user may see and run the demo helpers. */
+export async function canUseDemoTools(): Promise<boolean> {
+  const allowed = allowedDemoEmails();
+  if (!allowed.length) return false;
+  const session = await auth.api.getSession({ headers: await headers() });
+  const email = session?.user?.email?.toLowerCase();
+  return !!email && allowed.includes(email);
+}
+
+/** Server-side guard — the UI hides the buttons, this stops direct action calls. */
+async function requireDemoUser(): Promise<string> {
+  const userId = await requireUser();
+  if (!(await canUseDemoTools())) throw new Error('Demo tools are not enabled for this account');
+  return userId;
+}
+
 // A realistic starter pipeline — each item carries a real thesis, entry band,
 // invalidation and catalyst so change detection has something to judge against.
 const DEMO_ITEMS = [
@@ -37,7 +68,7 @@ const DEMO_ITEMS = [
 ] as const;
 
 export async function seedDemoWatchlist(): Promise<{ ok: boolean; added: number }> {
-  const userId = await requireUser();
+  const userId = await requireDemoUser();
   await connectToDatabase();
 
   const now = new Date();
@@ -72,7 +103,7 @@ export async function seedDemoWatchlist(): Promise<{ ok: boolean; added: number 
  * are synthetic.
  */
 export async function simulateSinceYouLeft(): Promise<{ ok: boolean; events: number }> {
-  const userId = await requireUser();
+  const userId = await requireDemoUser();
   await connectToDatabase();
 
   const items = await Watchlist.find({ userId }).lean();
