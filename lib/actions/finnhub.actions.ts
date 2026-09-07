@@ -1,10 +1,24 @@
 'use server';
 
 import { getDateRange, validateArticle, formatArticle } from '@/lib/utils';
-import { POPULAR_STOCK_SYMBOLS } from '@/lib/constants';
 import { cache } from 'react';
 
 const FINNHUB_BASE_URL = 'https://finnhub.io/api/v1';
+
+/** Shown before the user types. Static on purpose — see the note in searchStocks. */
+const SEED_SYMBOLS: ReadonlyArray<readonly [string, string]> = [
+  ['AAPL', 'Apple Inc'],
+  ['MSFT', 'Microsoft Corp'],
+  ['NVDA', 'NVIDIA Corp'],
+  ['GOOGL', 'Alphabet Inc'],
+  ['AMZN', 'Amazon.com Inc'],
+  ['META', 'Meta Platforms Inc'],
+  ['TSLA', 'Tesla Inc'],
+  ['JPM', 'JPMorgan Chase & Co'],
+  ['LLY', 'Eli Lilly & Co'],
+  ['XOM', 'Exxon Mobil Corp'],
+];
+
 const NEXT_PUBLIC_FINNHUB_API_KEY = process.env.NEXT_PUBLIC_FINNHUB_API_KEY ?? '';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -125,41 +139,18 @@ export const searchStocks = cache(async (query?: string): Promise<StockWithWatch
     let results: FinnhubSearchResult[] = [];
 
     if (!trimmed) {
-      // Fetch top 10 popular symbols' profiles
-      const top = POPULAR_STOCK_SYMBOLS.slice(0, 10);
-      const profiles = await Promise.all(
-        top.map(async (sym) => {
-          try {
-            const url = `${FINNHUB_BASE_URL}/stock/profile2?symbol=${encodeURIComponent(sym)}&token=${token}`;
-            // Revalidate every hour
-            const profile = await fetchJSON<any>(url, 3600);
-            return { sym, profile } as { sym: string; profile: any };
-          } catch (e) {
-            console.error('Error fetching profile2 for', sym, e);
-            return { sym, profile: null } as { sym: string; profile: any };
-          }
-        })
-      );
-
-      results = profiles
-        .map(({ sym, profile }) => {
-          const symbol = sym.toUpperCase();
-          const name: string | undefined = profile?.name || profile?.ticker || undefined;
-          const exchange: string | undefined = profile?.exchange || undefined;
-          if (!name) return undefined;
-          const r: FinnhubSearchResult = {
-            symbol,
-            description: name,
-            displaySymbol: symbol,
-            type: 'Common Stock',
-          };
-          // We don't include exchange in FinnhubSearchResult type, so carry via mapping later using profile
-          // To keep pipeline simple, attach exchange via closure map stage
-          // We'll reconstruct exchange when mapping to final type
-          (r as any).__exchange = exchange; // internal only
-          return r;
-        })
-        .filter((x): x is FinnhubSearchResult => Boolean(x));
+      // The empty-query case only seeds the search dropdown with a few well-known
+      // names — it needs a ticker and a label, nothing live. It used to fetch 10
+      // profile2 endpoints in parallel, which ran on EVERY page load (the header
+      // is a server component) and burned through Finnhub's 60 req/min free tier,
+      // producing 429s that then retried into 30 requests. Served statically now:
+      // zero API calls, and the quota stays available for real searches and the poll.
+      results = SEED_SYMBOLS.map(([symbol, description]) => ({
+        symbol,
+        description,
+        displaySymbol: symbol,
+        type: 'Common Stock',
+      }));
     } else {
       const url = `${FINNHUB_BASE_URL}/search?q=${encodeURIComponent(trimmed)}&token=${token}`;
       const data = await fetchJSON<FinnhubSearchResponse>(url, 1800);
