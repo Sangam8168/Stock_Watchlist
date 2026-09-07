@@ -14,77 +14,135 @@ Stock Watchlist — a thesis-aware watchlist that tells you what actually change
 
 ## DESCRIPTION
 
-*(The editor supports bold, lists and links — the formatting below is intentional.)*
+*(Paste into the Description field. The editor supports bold, headings, lists and
+links — the structure below is deliberate: it lets a reviewer skim the headings
+and still hit every requirement and judging criterion.)*
 
 ---
 
-**Most watchlists show you prices. Prices aren't change** — they're numbers you
-have to re-interpret on every visit. The brief asks for "what has meaningfully
-changed," and you can't answer that without knowing what the stock meant to the
-user in the first place.
+## Stock Watchlist — a smart market watchlist that shows what meaningfully changed since you last checked
 
-So here, **a watchlist item is a thesis**, not a ticker: an entry zone, a level
-that would prove you wrong, a target, and a catalyst date. "Meaningful" is judged
-against *that*, never a fixed 5% rule.
+**Most watchlists show you prices. Prices aren't change** — they're raw numbers
+you have to re-interpret on every single visit. The brief asks for *"what has
+meaningfully changed"*, and that question is unanswerable unless the system knows
+what the stock meant to **you** in the first place.
 
-**What the engine detects** (12 kinds, each scored 0–100 for severity):
+So in this app, **a watchlist item is a thesis, not a ticker**: an entry zone, an
+invalidation level that would prove you wrong, a price target, and a catalyst
+date. Every change is scored **relative to that thesis** — never a fixed "5% move"
+rule that's meaningless for one stock and catastrophic for another.
 
-- price entered **your** entry zone, breached **your** invalidation, or hit **your** target — direction-aware, so a short's levels invert
-- a move that's abnormal **for this stock's own volatility** (`max(5%, mean + 2σ)`), gated on market hours so an after-hours print isn't called a crash
-- a catalyst inside 5 **trading** days (not calendar days)
-- 52-week extremes, valuation re-rates, earnings prints, fresh coverage
-- **data-quality events** — stale or delayed quotes are surfaced as first-class changes rather than hidden
+---
 
-**Returning shows a diff, not a dashboard.** "While you were away" is filtered
-against a per-device watermark, so it's genuinely *since your last visit* — not a
-fixed 24-hour window. Each entry carries the literal **was → now**: `Price $63.86
-→ $60.14`, `Distance to entry −8.8% → −14.1%`, coloured against your thesis
-direction. A separate **History** view keeps the full chronological record,
-including events you've already reviewed.
+### ✅ How this meets the required functionality
 
-### Three engineering decisions I'd point a reviewer at
+**1. Create and manage a watchlist**
+Full CRUD via **Next.js Server Actions** (no REST layer): search-and-add any listed
+ticker, attach a thesis, edit or clear any level, snooze/mute, bulk select →
+categorise / mute / remove, move a bought position to a **Portfolio** section, and
+export to **CSV / Google Sheets**. Items are organised into 5 buckets, each with
+its own review cadence (Active setups · Developing · Long-term · Earnings watch ·
+Speculative).
 
-1. **The detection engine is a pure function.** `detectChanges(prev, next, thesis)`
-   — no I/O, no DB, no clock (market-hours and trading-day math are injected). It
-   is therefore fully unit-tested and replayable: **12 tests that run with no
-   `.env`, no database and no network.**
+**2. View latest market information**
+Live quotes, day change, 52-week range, P/E, market cap, next earnings date and
+company news from the **Finnhub API**, plus **TradingView** charts. Four
+presentation modes: Cards, sortable **Table** (General / Thesis / Performance /
+Fundamentals column presets), Chart, and History. Every data point carries its
+`source`, `asOf` timestamp and a `stale` flag — the UI tells you when data is
+delayed instead of quietly showing a stale number.
 
-2. **Detection is per-symbol, not per-user-per-symbol.** Events split into
-   *symbol-level* (shared: news, abnormal moves, earnings) and *thesis-level*
-   (per-user: your entry/invalidation/target). Cost scales with the number of
-   distinct tickers, not users × tickers. Measured in the running database:
-   **3 users watching NVDA produced 12 shared symbol-events — one set, not one
-   set each** — while only the genuinely user-specific thesis-events were stored
-   per person.
+**3. Return later and see what changed** ← *the heart of the project*
+Answered in **five layers**:
+- a **nav badge** with the unseen count, before you even open the page
+- **"While you were away"** — changes since **your** last visit, filtered against a
+  per-device watermark, not a fixed 24-hour window
+- literal **was → now deltas**: `Price $63.86 → $60.14`, `Distance to entry −8.8% → −14.1%`
+- a **History timeline** (24h / 7d / 30d / 90d) that keeps the full record even
+  after you've reviewed it
+- a **daily digest email** for when you don't come back at all
 
-3. **"Caught up" is per-device and monotonic.** Watermarks are keyed
-   `(userId, deviceId, symbol)` and only ever advance (`$max`), so your laptop
-   can't clear your phone's badges and a slow request can't re-hide something.
-   A brand-new device is seeded from your furthest-along one, so a new phone
-   doesn't replay three weeks you already triaged.
+---
 
-### On honesty about data
+### 🧠 Engineering depth & problem interpretation
 
-Every snapshot records its `source`, `asOf` and a `stale` flag, and the UI says
-when data is delayed instead of quietly showing a number. The same principle
-applies to the signed-out page: it renders **real** quotes, and when there isn't
-yet enough captured history to draw a truthful line, it shows the real quote
-board and says so rather than animating a generated one.
+**The change-detection engine is a pure function.**
+`detectChanges(previousSnapshot, currentSnapshot, thesis)` — no I/O, no database,
+no clock (market-hours and trading-day math are injected as dependencies). That
+makes it deterministic, replayable and **fully unit-tested: 12 test cases that run
+with no `.env`, no database and no network.** A reviewer can validate the core of
+this project in 30 seconds, before configuring anything.
 
-### Edge cases handled deliberately
+**Detection is per-symbol, not per-user-per-symbol.**
+Events are split into *symbol-level* (shared across everyone: news, abnormal
+moves, earnings, 52-week extremes) and *thesis-level* (private per user: your
+entry / invalidation / target). Detection cost therefore scales with the number of
+**distinct tickers**, not `users × tickers`. Measured in the running database:
+**3 users watching NVDA produced 12 shared symbol-events — one set, not one set
+per user.**
 
-- **Stock splits** — a 2:1 split looks identical to a −50% crash. Round-ratio
-  detection suppresses the false "invalidation breached" and asks you to re-check
-  your levels instead.
-- **First sighting** — a crossing requires *both* a previous and a current price,
-  so adding a stock never fires a fake "entered your zone."
-- **Delisted / no-quote tickers** — guarded so they don't render as `$0.00`.
-- **Runaway values** — a P/E re-rate is only reported inside sane bounds, after a
-  real ticker reported "P/E expanded 12342%" during testing.
+**Cross-device state is monotonic.**
+"Caught up" is tracked as `(userId, deviceId, symbol)` watermarks that only ever
+move forward (`$max`), so your laptop can't clear your phone's badges and a slow
+request can never re-hide something you've already seen. A brand-new device is
+seeded from your furthest-along device instead of replaying three weeks of
+history you already triaged.
 
-Built with Next.js 15 (App Router, Server Actions — no REST layer), TypeScript in
-strict mode, MongoDB with TTL-bounded collections, Better Auth, and Inngest for
-the poll and digest crons.
+**What counts as "meaningful"** — 12 change types, each scored 0–100 for severity:
+price entered *your* entry zone · breached *your* invalidation · hit *your* target
+(all direction-aware, so a short's levels invert) · a move abnormal **for this
+stock's own volatility** (`max(5%, mean + 2σ)`) · a catalyst within 5 **trading**
+days · 52-week highs/lows · valuation re-rates · earnings prints · fresh news
+coverage · corporate actions · **stale-data events**.
+
+---
+
+### 🛡️ Resilience & edge cases
+
+Handled deliberately, most found by running against real market data:
+
+- **Stock splits** — a 2:1 split is numerically identical to a −50% crash.
+  Round-ratio detection suppresses the false "invalidation breached" alert and
+  tells you to re-check your levels instead.
+- **First sighting** — a level crossing requires *both* a previous and a current
+  price, so adding a stock can never fire a phantom "entered your entry zone".
+- **Market hours** — abnormal-move alerts are gated on real NYSE sessions
+  (`America/New_York`, with a 2025–26 holiday calendar), so an after-hours print
+  isn't reported as a crash.
+- **Delisted / no-quote tickers** — guarded so they never render as `$0.00`.
+- **Runaway values** — P/E re-rates are bounded, after a real ticker reported
+  "P/E expanded 12342%" in testing.
+- **Duplicate/racing writes** — idempotent `dedupeKey` upserts mean the same
+  change is never logged twice, even if the poll overlaps itself.
+- **Graceful degradation** — no Google credentials hides the OAuth button; no mail
+  credentials prints password-reset links to the server console; no API key marks
+  data stale rather than inventing numbers.
+
+---
+
+### 🧹 Code quality & simplicity
+
+**TypeScript in strict mode**, zero `tsc` errors. Clear separation: a pure engine
+(`lib/changes/detect.ts`), an ingestion pipeline (`lib/watchlist/pipeline.ts`), a
+single shared read path so every surface — page, digest, email — stays consistent.
+No custom scheduler or queue: **Inngest** for crons and **MongoDB TTL indexes** for
+bounded retention. No WebSockets — a 15-minute grain is the right resolution for a
+*watchlist*, and pretending otherwise would be complexity for its own sake.
+
+**Stack:** Next.js 15 (App Router, Server Actions, Turbopack) · React 19 ·
+TypeScript · MongoDB + Mongoose · Better Auth (email/password + Google OAuth +
+password reset) · Inngest · Tailwind CSS v4 + shadcn/ui · Finnhub · Nodemailer.
+
+---
+
+### 💡 Originality
+
+The brief said *"don't build the obvious watchlist."* The obvious one is a price
+grid with percentage columns. This one inverts the question: instead of *"what is
+the price?"* it answers *"does this still deserve a place on my list, and what
+changed since I last decided that?"* — including a **stale-thesis sweep** that
+flags names which have gone quiet for 30+ days, so the list stays a decision tool
+rather than an archive.
 
 ---
 
