@@ -53,13 +53,44 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
     });
 
   if (counts.unseenEvents === 0) {
+    // "Nothing changed" is the most common state, and on its own it reads like a
+    // broken app. Say what's being watched and what would break the silence.
     return (
       <div className="rounded-xl border border-gray-700 bg-gray-800/60 p-5">
-        <p className="text-sm text-gray-400">
-          Nothing meaningful has changed since your last visit
-          {lastVisit ? ` (${timeAgo(lastVisit)})` : ''}. {counts.itemsTracked} item
-          {counts.itemsTracked === 1 ? '' : 's'} tracked, all quiet.
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-200">
+            <span className="h-2 w-2 rounded-full bg-green-500" />
+            All quiet
+          </h2>
+          <span className="text-xs text-gray-600">
+            {lastVisit ? `checked ${timeAgo(lastVisit)}` : 'first visit'}
+          </span>
+        </div>
+        <p className="mt-1.5 text-sm text-gray-500">
+          Watching <span className="font-medium text-gray-300">{counts.itemsTracked}</span>{' '}
+          {counts.itemsTracked === 1 ? 'thesis' : 'theses'}. Nothing has crossed a level you set.
         </p>
+
+        <div className="mt-3 border-t border-gray-700/70 pt-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+            You&rsquo;ll hear from us when
+          </p>
+          <ul className="mt-2 grid gap-x-6 gap-y-1.5 text-xs text-gray-500 sm:grid-cols-2">
+            {[
+              ['bg-yellow-500', 'price reaches your entry zone'],
+              ['bg-red-500', 'price breaks your invalidation level'],
+              ['bg-green-500', 'price hits your target'],
+              ['bg-amber-500', 'a move is unusually large for that stock'],
+              ['bg-gray-500', 'earnings or your catalyst is within a week'],
+              ['bg-gray-500', 'fresh news coverage appears'],
+            ].map(([dot, label]) => (
+              <li key={label} className="flex items-center gap-2">
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+                {label}
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     );
   }

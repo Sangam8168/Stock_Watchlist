@@ -253,6 +253,8 @@ declare global {
     type WatchlistEntry = {
         symbol: string;
         company: string;
+        /** Named list this item sits in — "Main" when the user hasn't made others. */
+        list: string;
         category: WatchlistCategoryName;
         thesis: string | null;
         direction: 'long' | 'short';
@@ -298,6 +300,7 @@ declare global {
     type AddWatchlistInput = {
         symbol: string;
         company: string;
+        list?: string;
         category?: WatchlistCategoryName;
         thesis?: string | null;
         direction?: 'long' | 'short';

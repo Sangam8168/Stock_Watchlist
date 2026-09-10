@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { headers } from 'next/headers';
 import { connectToDatabase } from '@/database/mongoose';
-import { Watchlist, WATCHLIST_CATEGORIES, type WatchlistCategory } from '@/database/models/watchlist.model';
+import { Watchlist, WATCHLIST_CATEGORIES, DEFAULT_LIST, type WatchlistCategory } from '@/database/models/watchlist.model';
 import { Snapshot } from '@/database/models/snapshot.model';
 import { WatchedSymbolModel } from '@/database/models/watchedSymbol.model';
 import { ChangeEventModel } from '@/database/models/changeEvent.model';
@@ -221,6 +221,7 @@ export async function getWatchlist(deviceId: string): Promise<WatchlistEntry[]> 
     return {
       symbol: item.symbol,
       company: item.company,
+      list: item.list || DEFAULT_LIST,
       category: item.category,
       thesis: item.thesis ?? null,
       direction: item.direction ?? 'long',
@@ -428,6 +429,7 @@ export async function addToWatchlist(input: AddWatchlistInput): Promise<{ ok: bo
     const category = WATCHLIST_CATEGORIES.includes(input.category as WatchlistCategory) ? input.category : 'developing';
     const { $set, $unset } = splitSetUnset({
       company: input.company?.trim() || symbol,
+      list: input.list?.trim() || DEFAULT_LIST,
       category,
       thesis: input.thesis === null ? null : input.thesis?.trim() || null,
       direction: input.direction === 'short' ? 'short' : 'long',
@@ -493,6 +495,7 @@ export async function updateWatchlistItem(
   // null → clear the field, undefined → leave it untouched. See splitSetUnset.
   const fields: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.category && WATCHLIST_CATEGORIES.includes(patch.category)) fields.category = patch.category;
+  if (patch.list !== undefined) fields.list = patch.list?.trim() || DEFAULT_LIST;
   if (patch.direction === 'long' || patch.direction === 'short') fields.direction = patch.direction;
   if (patch.thesis !== undefined) fields.thesis = patch.thesis === null ? null : patch.thesis.trim() || null;
   for (const k of ['entryLow', 'entryHigh', 'invalidationPrice', 'targetPrice'] as const) {
@@ -579,6 +582,80 @@ export async function bulkRemoveFromWatchlist(symbols: string[]): Promise<{ ok: 
   ]);
   revalidatePath('/watchlist');
   return { ok: true, removed: res.deletedCount ?? 0 };
+}
+
+/**
+ * The user's named lists, derived from the items themselves. "Main" is always
+ * offered so there's somewhere to move things back to.
+ *
+ * Note lists are a *view* concept only: detection, the digest and alerts all run
+ * across every item a user owns, regardless of list. You want to know your thesis
+ * broke whichever tab you happened to have open.
+ */
+export async function getWatchlistNames(): Promise<{ name: string; count: number }[]> {
+  const user = await getUser();
+  if (!user) return [];
+  await connectToDatabase();
+  const rows = await Watchlist.aggregate<{ _id: string | null; n: number }>([
+    { $match: { userId: user.id } },
+    { $group: { _id: '$list', n: { $sum: 1 } } },
+  ]);
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r._id || DEFAULT_LIST, (counts.get(r._id || DEFAULT_LIST) ?? 0) + r.n);
+  if (!counts.has(DEFAULT_LIST)) counts.set(DEFAULT_LIST, 0);
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((x, y) => (x.name === DEFAULT_LIST ? -1 : y.name === DEFAULT_LIST ? 1 : x.name.localeCompare(y.name)));
+}
+
+/**
+ * Remove a list without removing the research in it: its items move back to
+ * "Main". Deleting the theses themselves is a separate, explicit action
+ * (bulkRemoveFromWatchlist) — losing an entry zone and an invalidation level to
+ * a mis-click on a tab would be a bad trade.
+ */
+export async function deleteList(name: string): Promise<{ ok: boolean; moved: number; error?: string }> {
+  const user = await getUser();
+  if (!user) return { ok: false, moved: 0, error: 'Not signed in' };
+  if (name === DEFAULT_LIST) return { ok: false, moved: 0, error: `"${DEFAULT_LIST}" can't be deleted` };
+  await connectToDatabase();
+  const res = await Watchlist.updateMany(
+    { userId: user.id, list: name },
+    { $set: { list: DEFAULT_LIST, updatedAt: new Date() } }
+  );
+  revalidatePath('/watchlist');
+  return { ok: true, moved: res.modifiedCount ?? 0 };
+}
+
+/** Move selected symbols into a list, creating it implicitly if it's new. */
+export async function bulkMoveToList(symbols: string[], list: string): Promise<{ ok: boolean; updated: number }> {
+  const user = await getUser();
+  if (!user) return { ok: false, updated: 0 };
+  const name = list.trim().slice(0, 40) || DEFAULT_LIST;
+  const items = [...new Set(symbols.map((s) => s.trim().toUpperCase()))].filter(Boolean);
+  if (!items.length) return { ok: true, updated: 0 };
+  await connectToDatabase();
+  const res = await Watchlist.updateMany(
+    { userId: user.id, symbol: { $in: items } },
+    { $set: { list: name, updatedAt: new Date() } }
+  );
+  revalidatePath('/watchlist');
+  return { ok: true, updated: res.modifiedCount ?? 0 };
+}
+
+/** Rename a list in place. Deleting one just means moving its items elsewhere. */
+export async function renameList(from: string, to: string): Promise<{ ok: boolean; updated: number }> {
+  const user = await getUser();
+  if (!user) return { ok: false, updated: 0 };
+  const target = to.trim().slice(0, 40);
+  if (!target || target === from) return { ok: false, updated: 0 };
+  await connectToDatabase();
+  const res = await Watchlist.updateMany(
+    { userId: user.id, ...(from === DEFAULT_LIST ? { $or: [{ list: from }, { list: { $exists: false } }] } : { list: from }) },
+    { $set: { list: target, updatedAt: new Date() } }
+  );
+  revalidatePath('/watchlist');
+  return { ok: true, updated: res.modifiedCount ?? 0 };
 }
 
 export async function bulkSetCategory(

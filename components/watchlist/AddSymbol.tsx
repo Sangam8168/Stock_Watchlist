@@ -6,7 +6,7 @@ import { searchStocks } from '@/lib/actions/finnhub.actions';
 import { useDebounce } from '@/hooks/useDebounce';
 import ThesisDialog from '@/components/watchlist/ThesisDialog';
 
-export default function AddSymbol({ onAdded }: { onAdded: () => void }) {
+export default function AddSymbol({ onAdded, list }: { onAdded: () => void; list?: string }) {
   const [term, setTerm] = useState('');
   const [results, setResults] = useState<StockWithWatchlistStatus[]>([]);
   const [loading, setLoading] = useState(false);
@@ -90,6 +90,7 @@ export default function AddSymbol({ onAdded }: { onAdded: () => void }) {
 
       {selected && (
         <ThesisDialog
+          list={list}
           key={selected.symbol}
           symbol={selected.symbol}
           company={selected.name}

@@ -23,6 +23,8 @@ interface Props {
   company: string;
   mode: Mode;
   initial?: Partial<WatchlistEntry>;
+  /** Named list a newly-added stock should land in. */
+  list?: string;
   /** Uncontrolled usage: render this and the dialog opens on click. */
   trigger?: React.ReactNode;
   /** Controlled usage (pass both) — lets a parent own the open state. */
@@ -61,6 +63,7 @@ export default function ThesisDialog({
   company,
   mode,
   initial,
+  list,
   trigger,
   open: openProp,
   onOpenChange,
@@ -134,6 +137,7 @@ export default function ThesisDialog({
     const payload: AddWatchlistInput = {
       symbol,
       company,
+      list: list ?? initial?.list,
       category: (formData.get('category') as WatchlistCategoryName) || 'developing',
       direction: (formData.get('direction') as 'long' | 'short') || 'long',
       thesis: strOrNull(formData.get('thesis')),

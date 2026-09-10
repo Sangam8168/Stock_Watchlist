@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { RefreshCw, Mail, LayoutGrid, Table2, LineChart, History, X, Trash2, BellOff, Briefcase, Check } from 'lucide-react';
+import { RefreshCw, Mail, LayoutGrid, Table2, LineChart, X, Trash2, BellOff, Briefcase, Check, Pencil } from 'lucide-react';
 import { useDeviceId } from '@/hooks/useDeviceId';
 import { useUiPrefs } from '@/hooks/useUiPrefs';
 import {
@@ -15,6 +15,9 @@ import {
   bulkSetCategory,
   bulkSnooze,
   markThesisReviewed,
+  bulkMoveToList,
+  renameList,
+  deleteList,
   moveToPortfolio,
   returnToWatchlist,
 } from '@/lib/actions/watchlist.actions';
@@ -25,16 +28,15 @@ import WatchlistRow from '@/components/watchlist/WatchlistRow';
 import WatchlistTable, { TABLE_VIEWS, type TableView } from '@/components/watchlist/WatchlistTable';
 import WatchlistOptions from '@/components/watchlist/WatchlistOptions';
 import ChartView from '@/components/watchlist/ChartView';
-import ChangeHistory from '@/components/watchlist/ChangeHistory';
-import IndexStrip from '@/components/watchlist/IndexStrip';
 import AddSymbol from '@/components/watchlist/AddSymbol';
+import WatchlistNav from '@/components/watchlist/WatchlistNav';
 import Reveal from '@/components/Reveal';
 
 const CATEGORY_ORDER: WatchlistCategoryName[] = ['active', 'developing', 'earnings', 'longterm', 'speculative'];
 
 type FilterKey = 'all' | 'attention' | 'near' | 'catalyst' | 'muted';
 type SortKey = 'category' | 'attention' | 'distance' | 'catalyst' | 'recent' | 'az';
-type Layout = 'cards' | 'table' | 'chart' | 'history';
+type Layout = 'cards' | 'table' | 'chart';
 
 const FILTERS: { key: FilterKey; label: string; test: (e: WatchlistEntry) => boolean }[] = [
   { key: 'all', label: 'All', test: () => true },
@@ -68,6 +70,8 @@ export default function WatchlistView() {
   const [baselineDone, setBaselineDone] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
   const [demoTools, setDemoTools] = useState(false);
+  const [activeList, setActiveList] = useState<string>('Main');
+  const [draftLists, setDraftLists] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     if (!deviceId) return;
@@ -167,7 +171,41 @@ export default function WatchlistView() {
     });
   const clearSelection = () => setSelected(new Set());
 
-  const runBulk = async (fn: () => Promise<unknown>, msg: string) => {
+  // --- list management -----------------------------------------------------
+  const renameActiveList = async () => {
+    const next = window.prompt(`Rename "${activeList}" to:`, activeList)?.trim();
+    if (!next || next === activeList) return;
+    if (lists.some((l) => l.name.toLowerCase() === next.toLowerCase())) {
+      toast.error(`You already have a list called "${next}"`);
+      return;
+    }
+    setDraftLists((d) => d.map((n) => (n === activeList ? next : n)));
+    const res = await renameList(activeList, next);
+    setActiveList(next);
+    if (res.ok) toast.success(`Renamed to "${next}"`);
+    await load();
+  };
+
+  const deleteActiveList = async () => {
+    const count = candidates.length;
+    const ok = window.confirm(
+      count > 0
+        ? `Delete "${activeList}"?\n\nThe ${count} stock${count === 1 ? '' : 's'} in it will move back to Main — nothing is deleted.`
+        : `Delete the empty list "${activeList}"?`
+    );
+    if (!ok) return;
+    setDraftLists((d) => d.filter((n) => n !== activeList));
+    const res = await deleteList(activeList);
+    setActiveList('Main');
+    if (res.ok) {
+      toast.success(res.moved > 0 ? `List removed — ${res.moved} moved to Main` : 'List removed');
+    } else if (res.error) {
+      toast.error(res.error);
+    }
+    await load();
+  };
+
+  const runBulk = async (fn: () => Promise<unknown>, msg: string): Promise<void> => {
     await fn();
     toast.success(msg);
     clearSelection();
@@ -176,14 +214,32 @@ export default function WatchlistView() {
 
   // Candidates vs positions: a watchlist is what you might buy, a portfolio is
   // what you own. They need different attention, so they're shown separately.
-  const candidates = useMemo(() => (entries ?? []).filter((e) => !e.owned), [entries]);
+  // Lists are derived from the loaded rows, so switching tabs costs no request.
+  const lists = useMemo(() => {
+    const counts = new Map<string, number>([['Main', 0]]);
+    for (const e of entries ?? []) {
+      if (e.owned) continue;
+      counts.set(e.list, (counts.get(e.list) ?? 0) + 1);
+    }
+    // A list the user just created has no items yet, so it can't be derived from
+    // the rows — carry it locally until the first stock lands in it.
+    for (const d of draftLists) if (!counts.has(d)) counts.set(d, 0);
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => (a.name === 'Main' ? -1 : b.name === 'Main' ? 1 : a.name.localeCompare(b.name)));
+  }, [entries, draftLists]);
+
+  const candidates = useMemo(
+    () => (entries ?? []).filter((e) => !e.owned && e.list === activeList),
+    [entries, activeList]
+  );
   const positions = useMemo(() => (entries ?? []).filter((e) => e.owned), [entries]);
 
   // Bulk actions apply to `selected`, which is independent of what's rendered.
   // Narrowing the view would otherwise leave hidden rows armed for deletion.
   useEffect(() => {
     setSelected(new Set());
-  }, [filter, tableView]);
+  }, [filter, tableView, activeList]);
 
   const filtered = useMemo(() => {
     const f = FILTERS.find((x) => x.key === filter)!.test;
@@ -232,14 +288,21 @@ export default function WatchlistView() {
 
   return (
     <div className={`mx-auto space-y-6 py-8 ${widthClass}`}>
-      <div className="print:hidden"><IndexStrip /></div>
+      <WatchlistNav />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-100">Watchlist</h1>
           <p className="text-sm text-gray-500">
             {candidates.length} {candidates.length === 1 ? 'thesis' : 'theses'} in your research pipeline
-            {positions.length > 0 && ` · ${positions.length} owned`}
+            {positions.length > 0 && (
+              <>
+                {' · '}
+                <a href="/watchlist/portfolio" className="text-gray-400 underline-offset-2 hover:text-yellow-500 hover:underline">
+                  {positions.length} owned
+                </a>
+              </>
+            )}
           </p>
         </div>
 
@@ -249,7 +312,6 @@ export default function WatchlistView() {
               ['cards', LayoutGrid, 'Cards'],
               ['table', Table2, 'Table'],
               ['chart', LineChart, 'Chart'],
-              ['history', History, 'History'],
             ] as const).map(
               ([v, Icon, label]) => (
                 <button
@@ -265,14 +327,6 @@ export default function WatchlistView() {
               )
             )}
           </div>
-          <button
-            onClick={emailDigest}
-            disabled={emailing}
-            className="inline-flex items-center gap-2 rounded-md border border-gray-600 px-3 py-2 text-sm text-gray-300 hover:border-yellow-500 hover:text-yellow-500 disabled:opacity-50"
-            title="Send yourself the change digest now"
-          >
-            <Mail className="h-4 w-4" /> {emailing ? 'Sending…' : 'Email me this'}
-          </button>
           <button
             onClick={refreshNow}
             disabled={refreshing}
@@ -317,20 +371,124 @@ export default function WatchlistView() {
         </div>
       )}
 
-      <div className="print:hidden"><AddSymbol onAdded={load} /></div>
+      {/* Named lists. Derived from the rows themselves, so there's nothing to
+          create or delete — a list exists exactly while something is in it. */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-gray-700 print:hidden">
+        {lists.map((l) => (
+          <button
+            key={l.name}
+            onClick={() => setActiveList(l.name)}
+            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors ${
+              activeList === l.name
+                ? 'border-yellow-500 text-gray-100'
+                : 'border-transparent text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {l.name}
+            <span className={`rounded-full px-1.5 text-[10px] ${activeList === l.name ? 'bg-gray-700 text-gray-300' : 'text-gray-600'}`}>
+              {l.count}
+            </span>
+          </button>
+        ))}
+        {activeList !== 'Main' && (
+          <span className="ml-1 flex items-center gap-0.5">
+            <button
+              onClick={renameActiveList}
+              title={`Rename "${activeList}"`}
+              className="rounded p-1.5 text-gray-600 transition-colors hover:bg-gray-800 hover:text-gray-300"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={deleteActiveList}
+              title={`Delete "${activeList}" (stocks move back to Main)`}
+              className="rounded p-1.5 text-gray-600 transition-colors hover:bg-gray-800 hover:text-red-400"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </span>
+        )}
+        <button
+          onClick={() => {
+            const name = window.prompt('Name your new list (e.g. "AI plays", "Dividends")')?.trim();
+            if (!name) return;
+            if (lists.some((l) => l.name.toLowerCase() === name.toLowerCase())) {
+              toast.error(`You already have a list called "${name}"`);
+              return;
+            }
+            setDraftLists((d) => [...d, name]);
+            setActiveList(name);
+            toast.success(`"${name}" created — add a stock below, or move existing ones from the Table view`);
+          }}
+          className="ml-2 rounded-md border border-dashed border-gray-600 px-2.5 py-1 text-xs font-medium text-gray-300 transition-colors hover:border-yellow-500 hover:bg-yellow-500/10 hover:text-yellow-500"
+          title="Create a new list"
+        >
+          + New list
+        </button>
+      </div>
 
-      {candidates.length === 0 && positions.length === 0 ? (
+      <div className="print:hidden"><AddSymbol onAdded={load} list={activeList} /></div>
+
+      {candidates.length === 0 && (entries ?? []).length > 0 ? (
+        // Other lists have items — this one is just empty. Don't re-run onboarding.
         <div className="rounded-xl border border-dashed border-gray-700 p-10 text-center">
-          <p className="text-gray-400">Your watchlist is empty.</p>
-          <p className="mt-1 text-sm text-gray-600">
-            Add a stock above. Give each one a one-sentence thesis, an entry zone, and an invalidation level —
-            that&rsquo;s what makes &ldquo;meaningful change&rdquo; meaningful.
+          <p className="text-gray-300">
+            &ldquo;{activeList}&rdquo; is empty
           </p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-gray-600">
+            Search for a stock above to add it here, or go to the{' '}
+            <button onClick={() => setLayout('table')} className="text-yellow-500 underline hover:text-yellow-400">
+              Table view
+            </button>{' '}
+            to select stocks from another list and move them across.
+          </p>
+        </div>
+      ) : candidates.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-700 p-8">
+          <div className="mx-auto max-w-2xl">
+            <h2 className="text-center text-lg font-semibold text-gray-100">
+              This isn&rsquo;t a price list. It&rsquo;s a list of decisions.
+            </h2>
+            <p className="mx-auto mt-2 max-w-lg text-center text-sm text-gray-500">
+              Most watchlists show you a number and leave you to work out whether it matters.
+              Here you write down what you&rsquo;re waiting for once — then we tell you when it happens.
+            </p>
+
+            <ol className="mt-6 grid gap-3 sm:grid-cols-3">
+              {[
+                { n: '1', t: 'Add a stock', d: 'Search any ticker in the box above.' },
+                { n: '2', t: 'Say what you\u2019re waiting for', d: 'The price you\u2019d buy at, and the price that would mean you were wrong.' },
+                { n: '3', t: 'Come back', d: 'You\u2019ll see only what changed against your plan \u2014 not another wall of numbers.' },
+              ].map((s) => (
+                <li key={s.n} className="rounded-lg border border-gray-700 bg-gray-800/40 p-4">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-gray-950">
+                    {s.n}
+                  </span>
+                  <p className="mt-2 text-sm font-medium text-gray-200">{s.t}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-gray-500">{s.d}</p>
+                </li>
+              ))}
+            </ol>
+
+            {/* A concrete example does more than a definition. */}
+            <div className="mt-5 rounded-lg border border-gray-700 bg-gray-900/50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">For example</p>
+              <p className="mt-2 text-sm leading-relaxed text-gray-400">
+                You like <span className="font-semibold text-gray-200">NVIDIA</span>, but not at
+                <span className="tabular-nums text-gray-200"> $230</span>. You&rsquo;d buy around
+                <span className="tabular-nums text-yellow-500"> $158&ndash;$168</span>, and if it falls to
+                <span className="tabular-nums text-red-400"> $148</span> you&rsquo;d admit you were wrong.
+              </p>
+              <p className="mt-2 text-sm leading-relaxed text-gray-400">
+                Now a 2% dip that lands at <span className="tabular-nums text-gray-200">$163</span> is a
+                <span className="text-yellow-500"> headline</span> &mdash; and a noisy 8% day that changes nothing
+                stays quiet. That&rsquo;s the difference.
+              </p>
+            </div>
+          </div>
         </div>
       ) : layout === 'chart' ? (
         <ChartView entries={filtered} onBack={() => setLayout('table')} />
-      ) : layout === 'history' ? (
-        <ChangeHistory reloadKey={dataVersion} />
       ) : (
         <>
           {/* column-view tabs (table layout only) */}
@@ -410,6 +568,28 @@ export default function WatchlistView() {
                   <option key={c} value={c}>{CATEGORY_META[c].label}</option>
                 ))}
               </select>
+              <select
+                defaultValue=""
+                onChange={(e) => {
+                  const target = e.target.value;
+                  if (!target) return;
+                  const name =
+                    target === '__new'
+                      ? window.prompt('Move to which list?')?.trim()
+                      : target;
+                  e.target.value = '';
+                  if (!name) return;
+                  runBulk(() => bulkMoveToList([...selected], name), `Moved ${selected.size} to "${name}"`)
+                    .then(() => setActiveList(name));
+                }}
+                className="rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-300"
+              >
+                <option value="">Move to list…</option>
+                {lists.map((l) => (
+                  <option key={l.name} value={l.name}>{l.name}</option>
+                ))}
+                <option value="__new">+ New list…</option>
+              </select>
               <button
                 onClick={() => runBulk(() => markThesisReviewed([...selected]), `Marked ${selected.size} reviewed`)}
                 title="Reset the review clock — you've re-read the thesis and it still holds"
@@ -473,42 +653,6 @@ export default function WatchlistView() {
                 </Reveal>
               ))}
             </div>
-          )}
-
-          {/* Positions you actually own. Separated because owning changes the
-              question from "should I buy?" to "does the thesis still hold?" */}
-          {positions.length > 0 && (
-            <Reveal>
-              <section className="space-y-3">
-                <div className="flex items-baseline gap-2">
-                  <h2 className="inline-flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-gray-400">
-                    <Briefcase className="h-4 w-4" /> Portfolio
-                  </h2>
-                  <span className="text-xs text-gray-600">
-                    {positions.length} position{positions.length === 1 ? '' : 's'} · review the thesis, not the entry
-                  </span>
-                </div>
-                {positions.map((entry, i) => (
-                  <Reveal key={entry.symbol} delay={Math.min(i * 50, 250)}>
-                    <div>
-                      <WatchlistRow entry={entry} deviceId={deviceId} onChange={load} />
-                      <div className="mt-1 flex justify-end print:hidden">
-                        <button
-                          onClick={async () => {
-                            await returnToWatchlist(entry.symbol);
-                            toast.success(`${entry.symbol} back on the watchlist`);
-                            await load();
-                          }}
-                          className="rounded border border-gray-800 px-2 py-0.5 text-[11px] text-gray-600 hover:border-gray-600 hover:text-gray-300"
-                        >
-                          Sold — back to watchlist
-                        </button>
-                      </div>
-                    </div>
-                  </Reveal>
-                ))}
-              </section>
-            </Reveal>
           )}
 
           <Reveal>

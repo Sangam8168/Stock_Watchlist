@@ -13,10 +13,19 @@ export const WATCHLIST_CATEGORIES = [
 
 export type WatchlistCategory = (typeof WATCHLIST_CATEGORIES)[number];
 
+export const DEFAULT_LIST = 'Main';
+
 export interface WatchlistItem extends Document {
   userId: string;
   symbol: string;
   company: string;
+  /**
+   * Named list this item belongs to ("Main", "AI plays", "Dividends"…).
+   * Lists are derived from the distinct values here rather than stored in their
+   * own collection: (userId, symbol) is already unique, so a symbol lives in
+   * exactly one list, and there are no orphaned-list records to reconcile.
+   */
+  list: string;
   category: WatchlistCategory;
   thesis?: string;
   direction: 'long' | 'short';
@@ -48,6 +57,7 @@ const WatchlistSchema = new Schema<WatchlistItem>(
     userId: { type: String, required: true, index: true },
     symbol: { type: String, required: true, uppercase: true, trim: true },
     company: { type: String, required: true, trim: true },
+    list: { type: String, trim: true, maxlength: 40, default: DEFAULT_LIST },
     category: { type: String, enum: WATCHLIST_CATEGORIES, default: 'developing' },
     thesis: { type: String, trim: true, maxlength: 400 },
     direction: { type: String, enum: ['long', 'short'], default: 'long' },
@@ -73,6 +83,8 @@ const WatchlistSchema = new Schema<WatchlistItem>(
 WatchlistSchema.index({ userId: 1, symbol: 1 }, { unique: true });
 // Reverse lookup: "who watches this symbol" (detection fan-out, digest dispatch).
 WatchlistSchema.index({ symbol: 1, notify: 1 });
+// Listing a user's named lists.
+WatchlistSchema.index({ userId: 1, list: 1 });
 
 export const Watchlist: Model<WatchlistItem> =
   (models?.Watchlist as Model<WatchlistItem>) || model<WatchlistItem>('Watchlist', WatchlistSchema);
