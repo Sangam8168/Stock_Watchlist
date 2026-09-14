@@ -7,6 +7,7 @@ import WatchlistButton from '@/components/WatchlistButton';
 import ThesisDialog from '@/components/watchlist/ThesisDialog';
 import ThesisMeter from '@/components/watchlist/ThesisMeter';
 import DecisionTrail from '@/components/watchlist/DecisionTrail';
+import SteelmanButton from '@/components/watchlist/SteelmanButton';
 import {
   fmtPrice,
   severityTier,
@@ -120,6 +121,11 @@ export default function SymbolThesisPanel({ symbol, company }: { symbol: string;
             })}
           </ul>
         )}
+      </div>
+
+      {/* A gut-check against your own reasoning, on demand. */}
+      <div className="mt-4 border-t border-gray-800 pt-4">
+        <SteelmanButton symbol={entry.symbol} direction={entry.direction} />
       </div>
 
       {/* What the market did is above; this is what the user decided. */}
