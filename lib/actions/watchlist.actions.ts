@@ -21,9 +21,18 @@ async function getUser(): Promise<{ id: string; email: string } | null> {
   return session?.user ? { id: session.user.id, email: session.user.email } : null;
 }
 
+/**
+ * For actions whose return type has no error channel. Still throws — but logs
+ * first, so an expired session leaves a trace instead of surfacing to the client
+ * as an unhandled rejection that looks like a dead button. Prefer `getUser()`
+ * plus an `{ ok: false }` return for anything a user can trigger directly.
+ */
 async function requireUser(): Promise<{ id: string; email: string }> {
   const user = await getUser();
-  if (!user) throw new Error('Not authenticated');
+  if (!user) {
+    log.warn('action.unauthenticated', { hint: 'session expired or cookie missing' });
+    throw new Error('Not authenticated');
+  }
   return user;
 }
 
@@ -500,7 +509,8 @@ export async function addToWatchlist(input: AddWatchlistInput): Promise<{ ok: bo
 }
 
 export async function removeFromWatchlist(symbol: string): Promise<{ ok: boolean }> {
-  const user = await requireUser();
+  const user = await getUser();
+  if (!user) return { ok: false };
   const sym = symbol.trim().toUpperCase();
   await connectToDatabase();
   const res = await Watchlist.deleteOne({ userId: user.id, symbol: sym });
@@ -762,7 +772,8 @@ export async function snoozeWatchlistItem(symbol: string, days: number | null): 
  * slower device can never move it backwards and re-hide things you've seen.
  */
 export async function markSeen(deviceId: string, symbols?: string[]): Promise<{ ok: boolean }> {
-  const user = await requireUser();
+  const user = await getUser();
+  if (!user) return { ok: false };
   if (!deviceId) return { ok: false };
   await connectToDatabase();
   const now = new Date();

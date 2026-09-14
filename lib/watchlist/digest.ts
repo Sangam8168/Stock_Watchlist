@@ -6,6 +6,7 @@ import { connectToDatabase } from '@/database/mongoose';
 import { Watchlist } from '@/database/models/watchlist.model';
 import { loadChangeEvents, type MergedEvent } from '@/lib/watchlist/changes-read';
 import { severityTier, TIER_META, CHANGE_TYPE_LABEL } from '@/lib/changes/display';
+import { log } from '@/lib/observability/logger';
 
 export interface UserDigest {
   hasContent: boolean;
@@ -18,6 +19,7 @@ const esc = (s: string) =>
 
 export async function buildUserDigest(userId: string, sinceHours = 24): Promise<UserDigest> {
   await connectToDatabase();
+  log.debug('digest.build', { userId, sinceHours });
 
   const now = Date.now();
   const items = (await Watchlist.find({ userId, notify: true }).lean()).filter(

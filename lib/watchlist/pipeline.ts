@@ -12,6 +12,7 @@ import { WatchedSymbolModel } from '@/database/models/watchedSymbol.model';
 import { buildSnapshot } from '@/lib/actions/market-data.actions';
 import { detectChanges, volatilityFromChanges, type DetectedChange, type ChangeKind } from '@/lib/changes/detect';
 import { isMarketOpen, tradingDaysUntil } from '@/lib/market';
+import { log } from '@/lib/observability/logger';
 
 const MIN_SECONDS_BETWEEN_WRITES = 55; // collapse rapid manual refreshes
 const MIN_SECONDS_BETWEEN_FETCHES = 45; // don't spend Finnhub quota on refresh spam
@@ -219,6 +220,9 @@ export async function refreshSymbol(symbol: string): Promise<RefreshResult> {
 
     return { symbol: sym, wrote: true, snapshotId: toId, events };
   } catch (e) {
+    // Swallowed into the result so one bad symbol can't abort a whole poll
+    // batch — but recorded, or an entire cron run can fail with no trace.
+    log.error('pipeline.refresh_symbol.failed', e, { symbol: sym });
     return { symbol: sym, wrote: false, events: 0, error: e instanceof Error ? e.message : String(e) };
   }
 }

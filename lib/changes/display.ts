@@ -109,7 +109,10 @@ export function fmtPct(n: number | null | undefined): string {
 }
 
 export function fmtMarketCap(n: number | null | undefined): string {
-  if (typeof n !== 'number' || n <= 0) return '—';
+  // Number.isFinite, not `<= 0`: NaN fails every comparison, so `NaN <= 0` is
+  // false and a bare guard lets it through to render as "$NaN". Infinity likewise
+  // rendered as "$InfinityT".
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return '—';
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
   if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
   if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
