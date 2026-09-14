@@ -266,6 +266,8 @@ declare global {
         catalystNote: string | null;
         catalystTradingDays: number | null;
         notify: boolean;
+        sensitivity: number;
+        alertTone: 'signal' | 'all';
         mutedUntil: string | null;
         owned: boolean;
         ownedAt: string | null;
@@ -311,6 +313,8 @@ declare global {
         catalystDate?: string | null;
         catalystNote?: string | null;
         notify?: boolean;
+        sensitivity?: number;
+        alertTone?: 'signal' | 'all';
     };
 
     /** A single "was → now" measurement, shown next to the change events. */

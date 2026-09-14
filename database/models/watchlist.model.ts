@@ -36,6 +36,14 @@ export interface WatchlistItem extends Document {
   catalystDate?: Date;
   catalystNote?: string;
   notify: boolean;
+  /**
+   * Multiplier on this stock's abnormal-move threshold. Applied at *read* time,
+   * not detection time — symbol-level events are shared by every watcher, and
+   * generating per-user variants would give up the O(symbols) property.
+   */
+  sensitivity?: number;
+  /** 'signal' = only level-related alerts; 'all' = market colour too. */
+  alertTone?: 'signal' | 'all';
   /** Alerts + digest suppressed for this item until this time (snooze). */
   mutedUntil?: Date;
   /**
@@ -68,6 +76,8 @@ const WatchlistSchema = new Schema<WatchlistItem>(
     catalystDate: { type: Date },
     catalystNote: { type: String, trim: true, maxlength: 200 },
     notify: { type: Boolean, default: true },
+    sensitivity: { type: Number, default: 1, min: 0.5, max: 3 },
+    alertTone: { type: String, enum: ['signal', 'all'], default: 'all' },
     mutedUntil: { type: Date },
     owned: { type: Boolean, default: false },
     ownedAt: { type: Date },

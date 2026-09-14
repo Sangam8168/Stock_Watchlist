@@ -13,6 +13,7 @@ import { auth } from '@/lib/better-auth/auth';
 import { refreshSymbols, bumpWatchedSymbol } from '@/lib/watchlist/pipeline';
 import { loadChangeEvents, type MergedEvent } from '@/lib/watchlist/changes-read';
 import { tradingDaysUntil } from '@/lib/market';
+import { filterEvents, clampSensitivity, DEFAULT_PREFS, type AlertPrefs } from '@/lib/changes/preferences';
 import { log } from '@/lib/observability/logger';
 import { rateLimit, rateLimitMessage } from '@/lib/observability/rate-limit';
 
@@ -279,12 +280,22 @@ function buildEntry(
     symbol: string; company: string; list?: string; category: WatchlistCategoryName;
     thesis?: string; direction?: 'long' | 'short'; entryLow?: number; entryHigh?: number;
     invalidationPrice?: number; targetPrice?: number; catalystDate?: Date; catalystNote?: string;
-    notify: boolean; mutedUntil?: Date; owned?: boolean; ownedAt?: Date; ownedPrice?: number;
+    notify: boolean; sensitivity?: number; alertTone?: 'signal' | 'all';
+    mutedUntil?: Date; owned?: boolean; ownedAt?: Date; ownedPrice?: number;
     lastReviewedAt?: Date; addedAt: Date; updatedAt?: Date;
   },
   ctx: { snap: LeanSnapshot | null; watermark: number; events: MergedEvent[]; priceHistory: number[] }
 ): WatchlistEntry {
-  const { snap, watermark, events: symEvents, priceHistory } = ctx;
+  const { snap, watermark, events: allEvents, priceHistory } = ctx;
+
+  // Per-item preferences are applied here, on read. Symbol-level events are
+  // shared by every watcher, so this is the only place they can differ per user
+  // without giving up the O(symbols) detection property.
+  const prefs: AlertPrefs = {
+    sensitivity: clampSensitivity(item.sensitivity),
+    tone: item.alertTone === 'signal' ? 'signal' : 'all',
+  };
+  const symEvents = filterEvents(allEvents, prefs);
   const unseen = symEvents.filter((e) => new Date(e.createdAt).getTime() > watermark);
   const catalystDays = tradingDaysUntil(item.catalystDate ?? snap?.nextEarningsDate ?? null);
 
@@ -303,6 +314,8 @@ function buildEntry(
       catalystNote: item.catalystNote ?? null,
       catalystTradingDays: catalystDays,
       notify: item.notify,
+      sensitivity: clampSensitivity(item.sensitivity),
+      alertTone: item.alertTone === 'signal' ? 'signal' : 'all',
       mutedUntil: isMuted(item.mutedUntil) ? new Date(item.mutedUntil!).toISOString() : null,
       owned: !!item.owned,
       ownedAt: item.ownedAt ? new Date(item.ownedAt).toISOString() : null,
@@ -409,11 +422,21 @@ export async function getSinceYouLeft(deviceId: string): Promise<SinceYouLeftDig
   // Snoozed items don't shout at you until the mute expires.
   const mutedSymbols = new Set(items.filter((i) => isMuted(i.mutedUntil)).map((i) => i.symbol));
 
+  // Same preference filter the page uses. Three surfaces read these events —
+  // page, digest, email — and they must never disagree about what counts.
+  const prefsBySymbol = new Map<string, AlertPrefs>(
+    items.map((i) => [
+      i.symbol,
+      { sensitivity: clampSensitivity(i.sensitivity), tone: i.alertTone === 'signal' ? 'signal' : 'all' },
+    ])
+  );
+
   const bySymbol = new Map<string, MergedEvent[]>();
   for (const [sym, evs] of eventsBySymbol) {
     if (mutedSymbols.has(sym)) continue;
     const wm = watermarks[sym] ?? globalMs;
-    const fresh = evs.filter((e) => e.createdAt.getTime() > wm);
+    const allowed = filterEvents(evs, prefsBySymbol.get(sym) ?? DEFAULT_PREFS);
+    const fresh = allowed.filter((e) => e.createdAt.getTime() > wm);
     if (fresh.length) bySymbol.set(sym, fresh);
   }
   const unseen = [...bySymbol.values()].flat();
@@ -535,6 +558,8 @@ export async function addToWatchlist(input: AddWatchlistInput): Promise<{ ok: bo
       catalystDate: input.catalystDate ? new Date(input.catalystDate) : null,
       catalystNote: input.catalystNote === null ? null : input.catalystNote?.trim() || null,
       notify: input.notify ?? true,
+      sensitivity: input.sensitivity !== undefined ? clampSensitivity(input.sensitivity) : undefined,
+      alertTone: input.alertTone === 'signal' || input.alertTone === 'all' ? input.alertTone : undefined,
       updatedAt: new Date(),
     });
     await Watchlist.updateOne(
@@ -602,6 +627,8 @@ export async function updateWatchlistItem(
     fields.catalystNote = patch.catalystNote === null ? null : patch.catalystNote.trim() || null;
   }
   if (patch.notify !== undefined) fields.notify = patch.notify;
+  if (patch.sensitivity !== undefined) fields.sensitivity = clampSensitivity(patch.sensitivity);
+  if (patch.alertTone === 'signal' || patch.alertTone === 'all') fields.alertTone = patch.alertTone;
 
   const sym = symbol.trim().toUpperCase();
   const { $set, $unset } = splitSetUnset(fields);
@@ -721,6 +748,30 @@ export async function deleteList(name: string): Promise<{ ok: boolean; moved: nu
   );
   revalidatePath('/watchlist');
   return { ok: true, moved: res.modifiedCount ?? 0 };
+}
+
+/**
+ * Per-item alert volume. Applied on read, so changing it re-filters existing
+ * events immediately rather than only affecting future ones.
+ */
+export async function setAlertPrefs(
+  symbol: string,
+  prefs: { sensitivity?: number; alertTone?: 'signal' | 'all' }
+): Promise<{ ok: boolean }> {
+  const user = await getUser();
+  if (!user) return { ok: false };
+  await connectToDatabase();
+
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (prefs.sensitivity !== undefined) set.sensitivity = clampSensitivity(prefs.sensitivity);
+  if (prefs.alertTone === 'signal' || prefs.alertTone === 'all') set.alertTone = prefs.alertTone;
+
+  const res = await Watchlist.updateOne(
+    { userId: user.id, symbol: symbol.trim().toUpperCase() },
+    { $set: set }
+  );
+  revalidatePath('/watchlist');
+  return { ok: res.matchedCount > 0 };
 }
 
 /** Move selected symbols into a list, creating it implicitly if it's new. */

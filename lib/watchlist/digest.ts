@@ -5,6 +5,7 @@
 import { connectToDatabase } from '@/database/mongoose';
 import { Watchlist } from '@/database/models/watchlist.model';
 import { loadChangeEvents, type MergedEvent } from '@/lib/watchlist/changes-read';
+import { filterEvents, clampSensitivity, DEFAULT_PREFS, type AlertPrefs } from '@/lib/changes/preferences';
 import { severityTier, TIER_META, CHANGE_TYPE_LABEL } from '@/lib/changes/display';
 import { log } from '@/lib/observability/logger';
 
@@ -31,6 +32,20 @@ export async function buildUserDigest(userId: string, sinceHours = 24): Promise<
   const since = new Date(Date.now() - sinceHours * 3600_000);
 
   const bySymbol = await loadChangeEvents(userId, notifySymbols, { since, perSymbolCap: 6 });
+
+  // The email must show exactly what the page would show — same filter.
+  const prefsFor = (sym: string): AlertPrefs => {
+    const i = items.find((x) => x.symbol === sym);
+    return i
+      ? { sensitivity: clampSensitivity(i.sensitivity), tone: i.alertTone === 'signal' ? 'signal' : 'all' }
+      : DEFAULT_PREFS;
+  };
+  for (const [sym, evs] of bySymbol) {
+    const kept = filterEvents(evs, prefsFor(sym));
+    if (kept.length) bySymbol.set(sym, kept);
+    else bySymbol.delete(sym);
+  }
+
   const events: MergedEvent[] = [...bySymbol.values()].flat().sort((a, b) => b.severity - a.severity);
 
   if (!events.length) return { hasContent: false, summaryLine: '', bodyHtml: '' };

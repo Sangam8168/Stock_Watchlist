@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { addToWatchlist, updateWatchlistItem } from '@/lib/actions/watchlist.actions';
 import { getQuote } from '@/lib/actions/market-data.actions';
 import { extractThesisLocally } from '@/lib/changes/parse-thesis';
+import { SENSITIVITY_STEPS } from '@/lib/changes/preferences';
 import { CATEGORY_META } from '@/lib/changes/display';
 
 type Mode = 'add' | 'edit';
@@ -84,6 +85,8 @@ export default function ThesisDialog({
   const [quote, setQuote] = useState<number | null>(initial?.price ?? null);
   const [quoteState, setQuoteState] = useState<'idle' | 'loading' | 'done' | 'fail'>('idle');
 
+  const [sens, setSens] = useState<number>(initial?.sensitivity ?? 1);
+  const [tone, setTone] = useState<'signal' | 'all'>(initial?.alertTone ?? 'all');
   const [paste, setPaste] = useState('');
   const [pasteOpen, setPasteOpen] = useState(false);
   const [cat, setCat] = useState<WatchlistCategoryName>((initial?.category as WatchlistCategoryName) ?? 'developing');
@@ -150,6 +153,8 @@ export default function ThesisDialog({
       targetPrice: numOrNull(formData.get('targetPrice')),
       catalystDate: strOrNull(formData.get('catalystDate')),
       catalystNote: strOrNull(formData.get('catalystNote')),
+      sensitivity: sens,
+      alertTone: tone,
       notify: formData.get('notify') === 'on',
     };
 
@@ -427,6 +432,43 @@ export default function ThesisDialog({
               ))}
             </div>
           )}
+
+          {/* Alert volume, per stock. A noisy name shouldn't force you to mute it
+              entirely — turn its sensitivity down instead. */}
+          <div className="grid gap-3 rounded-lg border border-gray-700 bg-gray-900/30 p-3 sm:grid-cols-2">
+            <div>
+              <label className={labelCls}>How much should this one say?</label>
+              <div className="flex overflow-hidden rounded-md border border-gray-600">
+                {([['all', 'Everything'], ['signal', 'Signal only']] as const).map(([v, lbl]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setTone(v)}
+                    title={v === 'signal' ? 'Only your entry, invalidation, target and catalysts' : 'Also news, unusual moves and 52-week extremes'}
+                    className={`flex-1 px-2 py-1.5 text-xs transition-colors ${
+                      tone === v ? 'bg-gray-700 text-gray-100' : 'text-gray-500 hover:text-gray-300'
+                    }`}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>Move sensitivity</label>
+              <select
+                value={sens}
+                onChange={(e) => setSens(Number(e.target.value))}
+                disabled={tone === 'signal'}
+                title={tone === 'signal' ? 'Not used while set to Signal only' : undefined}
+                className={`${field} h-9 text-xs disabled:opacity-40`}
+              >
+                {SENSITIVITY_STEPS.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label} — {s.hint}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
           <label className="flex items-center gap-2 text-sm text-gray-400">
             <input type="checkbox" name="notify" defaultChecked={initial?.notify ?? true} className="accent-yellow-500" />
