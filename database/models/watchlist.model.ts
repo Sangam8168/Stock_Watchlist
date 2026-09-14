@@ -85,6 +85,9 @@ WatchlistSchema.index({ userId: 1, symbol: 1 }, { unique: true });
 WatchlistSchema.index({ symbol: 1, notify: 1 });
 // Listing a user's named lists.
 WatchlistSchema.index({ userId: 1, list: 1 });
+// The stale-thesis sweep scans by category across *all* users. Without this it
+// is a full collection scan of every watchlist item, every weekday.
+WatchlistSchema.index({ category: 1, addedAt: 1 });
 
 export const Watchlist: Model<WatchlistItem> =
   (models?.Watchlist as Model<WatchlistItem>) || model<WatchlistItem>('Watchlist', WatchlistSchema);

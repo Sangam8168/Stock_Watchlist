@@ -237,12 +237,23 @@ async function seenWatermarks(userId: string, deviceId: string): Promise<Record<
   return map;
 }
 
+/**
+ * Hard ceiling on rows enriched in one request. Enrichment costs several
+ * aggregations across the snapshot series, so an unbounded personal watchlist
+ * would make the page slower the more you tracked. Well above any realistic
+ * list; `getWatchlistNames()` still reports true counts.
+ */
+const MAX_ENRICHED_ITEMS = 250;
+
 export async function getWatchlist(deviceId: string): Promise<WatchlistEntry[]> {
   const user = await getUser();
   if (!user) return [];
   await connectToDatabase();
 
-  const items = await Watchlist.find({ userId: user.id }).sort({ addedAt: -1 }).lean();
+  const items = await Watchlist.find({ userId: user.id })
+    .sort({ addedAt: -1 })
+    .limit(MAX_ENRICHED_ITEMS)
+    .lean();
   const symbols = items.map((i) => i.symbol);
   const [snaps, watermarks, history] = await Promise.all([
     latestSnapshotsFor(symbols),
@@ -252,14 +263,32 @@ export async function getWatchlist(deviceId: string): Promise<WatchlistEntry[]> 
 
   const eventsBySymbol = await loadChangeEvents(user.id, symbols, { perSymbolCap: 12 });
 
-  return items.map((item) => {
-    const snap = snaps[item.symbol] ?? null;
-    const watermark = watermarks[item.symbol] ?? watermarks[GLOBAL_SEEN_KEY] ?? 0;
-    const symEvents = eventsBySymbol.get(item.symbol) ?? [];
-    const unseen = symEvents.filter((e) => new Date(e.createdAt).getTime() > watermark);
-    const catalystDays = tradingDaysUntil(item.catalystDate ?? snap?.nextEarningsDate ?? null);
+  return items.map((item) =>
+    buildEntry(item as never, {
+      snap: snaps[item.symbol] ?? null,
+      watermark: watermarks[item.symbol] ?? watermarks[GLOBAL_SEEN_KEY] ?? 0,
+      events: eventsBySymbol.get(item.symbol) ?? [],
+      priceHistory: history[item.symbol] ?? [],
+    })
+  );
+}
 
-    return {
+/** Shared enrichment so the list and the single-item path can never drift. */
+function buildEntry(
+  item: {
+    symbol: string; company: string; list?: string; category: WatchlistCategoryName;
+    thesis?: string; direction?: 'long' | 'short'; entryLow?: number; entryHigh?: number;
+    invalidationPrice?: number; targetPrice?: number; catalystDate?: Date; catalystNote?: string;
+    notify: boolean; mutedUntil?: Date; owned?: boolean; ownedAt?: Date; ownedPrice?: number;
+    lastReviewedAt?: Date; addedAt: Date; updatedAt?: Date;
+  },
+  ctx: { snap: LeanSnapshot | null; watermark: number; events: MergedEvent[]; priceHistory: number[] }
+): WatchlistEntry {
+  const { snap, watermark, events: symEvents, priceHistory } = ctx;
+  const unseen = symEvents.filter((e) => new Date(e.createdAt).getTime() > watermark);
+  const catalystDays = tradingDaysUntil(item.catalystDate ?? snap?.nextEarningsDate ?? null);
+
+  return {
       symbol: item.symbol,
       company: item.company,
       list: item.list || DEFAULT_LIST,
@@ -287,7 +316,7 @@ export async function getWatchlist(deviceId: string): Promise<WatchlistEntry[]> 
         (Date.now() - new Date(item.lastReviewedAt ?? item.updatedAt ?? item.addedAt).getTime()) / 864e5
       ),
       addedAt: new Date(item.addedAt).toISOString(),
-      priceHistory: history[item.symbol] ?? [],
+    priceHistory,
       price: snap?.price ?? null,
       changePercent: snap?.changePercent ?? null,
       week52High: snap?.week52High ?? null,
@@ -300,16 +329,41 @@ export async function getWatchlist(deviceId: string): Promise<WatchlistEntry[]> 
       distanceToEntryPct: entryDistancePct(snap?.price ?? null, item.entryLow, item.entryHigh),
       unseenCount: unseen.length,
       topUnseenSeverity: unseen.reduce((m, e) => Math.max(m, e.severity), 0),
-      events: symEvents.slice(0, 12).map(serializeEvent),
-    };
-  });
+    events: symEvents.slice(0, 12).map(serializeEvent),
+  };
 }
 
 /** Single enriched entry for a symbol (stock detail page). Null if not watched. */
+/**
+ * Single enriched entry for the stock detail page.
+ *
+ * Previously this called getWatchlist() and filtered the result — every
+ * snapshot aggregation for every symbol you track, to render one row. Now it
+ * queries just the one item, so the detail page costs the same whether you
+ * watch three stocks or three hundred.
+ */
 export async function getWatchlistEntry(symbol: string, deviceId: string): Promise<WatchlistEntry | null> {
+  const user = await getUser();
+  if (!user) return null;
+  await connectToDatabase();
+
   const sym = symbol.trim().toUpperCase();
-  const all = await getWatchlist(deviceId);
-  return all.find((e) => e.symbol === sym) ?? null;
+  const item = await Watchlist.findOne({ userId: user.id, symbol: sym }).lean();
+  if (!item) return null;
+
+  const [snaps, watermarks, history, eventsBySymbol] = await Promise.all([
+    latestSnapshotsFor([sym]),
+    seenWatermarks(user.id, deviceId),
+    priceHistoryFor([sym]),
+    loadChangeEvents(user.id, [sym], { perSymbolCap: 12 }),
+  ]);
+
+  return buildEntry(item as never, {
+    snap: snaps[sym] ?? null,
+    watermark: watermarks[sym] ?? watermarks[GLOBAL_SEEN_KEY] ?? 0,
+    events: eventsBySymbol.get(sym) ?? [],
+    priceHistory: history[sym] ?? [],
+  });
 }
 
 function entryDistancePct(price: number | null, low?: number, high?: number): number | null {

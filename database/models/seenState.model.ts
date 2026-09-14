@@ -26,6 +26,11 @@ const SeenStateSchema = new Schema<SeenState>(
 );
 
 SeenStateSchema.index({ userId: 1, deviceId: 1, symbol: 1 }, { unique: true });
+// Watermarks are per-device, and devices are disposable — a private-mode tab or
+// a cleared browser mints one that is never seen again. Without expiry this
+// collection grows forever with rows nothing will ever read. Six months is well
+// past any real "I last checked" window.
+SeenStateSchema.index({ lastSeenAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 180 });
 
 export const SeenStateModel: Model<SeenState> =
   (models?.SeenState as Model<SeenState>) || model<SeenState>('SeenState', SeenStateSchema);

@@ -47,3 +47,6 @@ next-env.d.ts
 
 # Claude Code local config
 .claude/
+
+# Local database backups — contain user data
+backups/

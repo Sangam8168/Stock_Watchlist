@@ -141,3 +141,59 @@ TTL indexes keep every growing collection flat regardless of age.
 | 10k users | `DailyBar` rollup; move Finnhub price to the trade websocket + Redis latest-price cache |
 | 100k users | shard the poll cron by symbol-hash; Redis token-bucket rate limiter for the provider; timezone-bucketed digest crons; a real email provider |
 | 1M users | Mongo sharding per the table above; separate read replica for page loads; the change feed on a queue (Kafka/SQS) instead of direct writes |
+
+---
+
+## Operations
+
+### Backup and restore
+
+```bash
+npm run backup                          # → backups/<ISO-timestamp>/
+npm run restore backups/<timestamp>     # idempotent upsert by _id
+npm run restore backups/<timestamp> --wipe   # only after data loss
+```
+
+Backups are **deliberately partial**. `snapshots`, `changeevents` and
+`symbolevents` are excluded: they are derived data that the poll regenerates,
+and all three carry TTL indexes, so archiving them would multiply backup size
+for information that expires anyway. What gets backed up is the irreplaceable
+part — a user's theses, levels, lists (`watchlists`), how far they've read
+(`seenstates`), and their identity (`user`, `account`).
+
+Both scripts stream with cursors and `bulkWrite` in batches of 500, so neither
+needs the database to fit in memory. Restore upserts by `_id`, making it safe to
+re-run; `--wipe` is never the default because against a live database it is
+destructive.
+
+Verified end to end: a backup of the development database restored into a
+scratch database reproduced document counts exactly.
+
+### Schema migrations
+
+Every schema change so far has been additive with a default — `list` defaults to
+`"Main"`, `owned` to `false` — so existing documents read correctly without a
+migration step. That is a deliberate constraint, not luck: it keeps deploys
+reversible, because an older build ignores a field it doesn't know about.
+
+A genuinely breaking change (renaming or retyping a field) would need the
+standard expand/contract sequence: ship code that writes both shapes, backfill,
+switch reads, then drop the old field in a later release. Take a backup first.
+
+### Indexes that exist for a specific query
+
+| Index | Serves |
+|---|---|
+| `watchlist { userId, symbol }` unique | one row per user per ticker |
+| `watchlist { symbol, notify }` | detection fan-out, digest dispatch |
+| `watchlist { userId, list }` | named lists |
+| `watchlist { category, addedAt }` | the stale-thesis sweep, which scans by category across all users — without this it is a full collection scan every weekday |
+| `snapshot { symbol, capturedAt }` | latest / as-of / history aggregations |
+| `changeevent { userId, symbol, createdAt }` | unseen counts, per-symbol feeds |
+| `changeevent { userId, dedupeKey }` unique | idempotent writes |
+| `seenstate { userId, deviceId, symbol }` unique | watermark reads |
+
+TTL indexes bound growth without a cleanup job: snapshots 90 days, events 120
+days, seen-state 180 days (devices are disposable — a private-mode tab mints a
+watermark that is never read again), rate-limit counters at the end of their
+window.
