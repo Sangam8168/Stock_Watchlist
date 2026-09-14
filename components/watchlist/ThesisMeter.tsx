@@ -11,6 +11,14 @@ export default function ThesisMeter({ entry }: { entry: WatchlistEntry }) {
   const { price, entryLow, entryHigh, invalidationPrice, targetPrice, direction } = entry;
   if (price == null || entryLow == null || entryHigh == null) return null;
 
+  // Confidence decay. A thesis you wrote three months ago and haven't re-read is
+  // worth less than one you confirmed yesterday, so let the bar *look* less
+  // certain as it ages rather than only flagging it in a column. Full colour for
+  // the first fortnight, fading to ~40% saturation by 90 days.
+  const age = entry.daysSinceReview ?? 0;
+  const decay = Math.min(1, Math.max(0, (age - 14) / 76));
+  const confidence = { filter: `saturate(${(1 - decay * 0.6).toFixed(2)})`, opacity: 1 - decay * 0.25 };
+
   const marks = [price, entryLow, entryHigh, invalidationPrice, targetPrice].filter(
     (v): v is number => typeof v === 'number'
   );
@@ -42,7 +50,7 @@ export default function ThesisMeter({ entry }: { entry: WatchlistEntry }) {
 
   return (
     <div className="mt-2">
-      <div className="relative h-2 w-full rounded-full bg-gray-700">
+      <div className="relative h-2 w-full rounded-full bg-gray-700 transition-[filter,opacity] duration-500" style={confidence}>
         {dangerStyle && <div className="absolute inset-y-0 rounded-full bg-red-500/40" style={dangerStyle} />}
         {profitStyle && <div className="absolute inset-y-0 rounded-full bg-green-500/40" style={profitStyle} />}
         <div className="absolute inset-y-0 rounded-full bg-yellow-500/70" style={{ left: bandLeft, width: bandWidth }} />
@@ -57,6 +65,11 @@ export default function ThesisMeter({ entry }: { entry: WatchlistEntry }) {
         <span className="text-gray-400">now {fmtPrice(price)}</span>
         <span>{fmtPrice(hi - pad)}</span>
       </div>
+      {age >= 30 && (
+        <p className="mt-1 text-[10px] text-amber-500/80" title="Levels you set a while ago may no longer reflect the setup">
+          Not reviewed in {age} days — still the right levels?
+        </p>
+      )}
     </div>
   );
 }

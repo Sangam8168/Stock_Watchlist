@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { addToWatchlist, updateWatchlistItem } from '@/lib/actions/watchlist.actions';
 import { getQuote } from '@/lib/actions/market-data.actions';
+import { extractThesisLocally } from '@/lib/changes/parse-thesis';
 import { CATEGORY_META } from '@/lib/changes/display';
 
 type Mode = 'add' | 'edit';
@@ -83,6 +84,8 @@ export default function ThesisDialog({
   const [quote, setQuote] = useState<number | null>(initial?.price ?? null);
   const [quoteState, setQuoteState] = useState<'idle' | 'loading' | 'done' | 'fail'>('idle');
 
+  const [paste, setPaste] = useState('');
+  const [pasteOpen, setPasteOpen] = useState(false);
   const [cat, setCat] = useState<WatchlistCategoryName>((initial?.category as WatchlistCategoryName) ?? 'developing');
   const [dir, setDir] = useState<'long' | 'short'>(initial?.direction === 'short' ? 'short' : 'long');
   const [lo, setLo] = useState(initial?.entryLow != null ? String(initial.entryLow) : '');
@@ -218,6 +221,67 @@ export default function ThesisDialog({
               >
                 Suggest levels
               </button>
+            )}
+          </div>
+
+          {/* Paste-to-thesis. Writing levels is the highest-friction step and the
+              one that makes the product work, so accept the note as the user
+              would actually say it and fill the fields from that. */}
+          <div className="rounded-lg border border-gray-700 bg-gray-900/40 p-3">
+            {!pasteOpen ? (
+              <button
+                type="button"
+                onClick={() => setPasteOpen(true)}
+                className="text-xs text-gray-400 transition-colors hover:text-yellow-500"
+              >
+                ✨ Paste a note instead &mdash; we&rsquo;ll fill these in
+              </button>
+            ) : (
+              <>
+                <label className={labelCls}>Describe it however you&rsquo;d say it</label>
+                <textarea
+                  value={paste}
+                  onChange={(e) => setPaste(e.target.value)}
+                  rows={2}
+                  placeholder="thinking NVDA is a buy under 130, out if it breaks 110, target 160 by earnings"
+                  className="w-full resize-none rounded-md border border-gray-600 bg-gray-800/80 px-3 py-2 text-sm text-gray-100 outline-none transition-all focus:border-yellow-500 focus:ring-2 focus:ring-yellow-500/20"
+                />
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const r = extractThesisLocally(paste);
+                      if (!r.found.length) {
+                        toast.error('Couldn\u2019t find any levels in that', {
+                          description: 'Try something like "buy under 130, out below 110, target 160".',
+                        });
+                        return;
+                      }
+                      if (r.entryLow != null) setLo(String(r.entryLow));
+                      if (r.entryHigh != null) setHi(String(r.entryHigh));
+                      if (r.invalidationPrice != null) setInv(String(r.invalidationPrice));
+                      if (r.targetPrice != null) setTgt(String(r.targetPrice));
+                      if (r.direction) setDir(r.direction);
+                      // Always show what was understood — silent partial fills
+                      // are how a wrong invalidation slips through unnoticed.
+                      toast.success(`Filled ${r.found.length} field${r.found.length === 1 ? '' : 's'}`, {
+                        description: 'Check them before saving — the engine judges every alert against these.',
+                      });
+                    }}
+                    disabled={!paste.trim()}
+                    className="rounded-md bg-yellow-500 px-3 py-1.5 text-xs font-medium text-gray-950 transition-opacity hover:opacity-90 disabled:opacity-40"
+                  >
+                    Fill the fields
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setPasteOpen(false); setPaste(''); }}
+                    className="text-xs text-gray-600 hover:text-gray-400"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
             )}
           </div>
 

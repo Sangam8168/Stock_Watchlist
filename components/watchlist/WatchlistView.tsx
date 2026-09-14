@@ -24,6 +24,7 @@ import {
 import { seedDemoWatchlist, simulateSinceYouLeft, canUseDemoTools } from '@/lib/actions/demo.actions';
 import { CATEGORY_META, fmtPct, fmtMarketCap } from '@/lib/changes/display';
 import SinceYouLeft from '@/components/watchlist/SinceYouLeft';
+import ThesisHealth from '@/components/watchlist/ThesisHealth';
 import WatchlistRow from '@/components/watchlist/WatchlistRow';
 import WatchlistTable, { TABLE_VIEWS, type TableView } from '@/components/watchlist/WatchlistTable';
 import WatchlistOptions from '@/components/watchlist/WatchlistOptions';
@@ -358,6 +359,8 @@ export default function WatchlistView() {
           </button>
         </div>
       )}
+
+      {candidates.length > 0 && <ThesisHealth entries={candidates} />}
 
       <div className="print:hidden">
         <SinceYouLeft digest={digest} deviceId={deviceId} onReviewed={load} onItemChange={load} />
