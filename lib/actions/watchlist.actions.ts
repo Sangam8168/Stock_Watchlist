@@ -13,6 +13,8 @@ import { auth } from '@/lib/better-auth/auth';
 import { refreshSymbols, bumpWatchedSymbol } from '@/lib/watchlist/pipeline';
 import { loadChangeEvents, type MergedEvent } from '@/lib/watchlist/changes-read';
 import { tradingDaysUntil } from '@/lib/market';
+import { log } from '@/lib/observability/logger';
+import { rateLimit, rateLimitMessage } from '@/lib/observability/rate-limit';
 
 async function getUser(): Promise<{ id: string; email: string } | null> {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -157,8 +159,9 @@ export async function ensureSeenBaseline(deviceId: string): Promise<{ ok: boolea
  * watermark, so a global-only count would sit at "9+" forever while the panel
  * says everything is quiet.
  *
- * Cost stays bounded: one small watermark read plus two counts whose `$or` has
- * one clause per watched symbol.
+ * Cost stays flat with watchlist size: symbols covered by the global watermark
+ * collapse into one indexed range query, and only individually-reviewed symbols
+ * need a `$or` clause of their own.
  */
 export async function getUnseenCount(deviceId: string): Promise<number> {
   const user = await getUser();
@@ -170,15 +173,44 @@ export async function getUnseenCount(deviceId: string): Promise<number> {
     seenWatermarks(user.id, deviceId),
   ]);
   const globalMs = watermarks[GLOBAL_SEEN_KEY] ?? 0;
+  const globalSince = new Date(globalMs);
 
-  const clauses = items
-    .filter((i) => !isMuted(i.mutedUntil))
-    .map((i) => ({ symbol: i.symbol, createdAt: { $gt: new Date(watermarks[i.symbol] ?? globalMs) } }));
-  if (!clauses.length) return 0;
+  const visible = items.filter((i) => !isMuted(i.mutedUntil)).map((i) => i.symbol);
+  if (!visible.length) return 0;
+
+  // Most people clear everything with "Mark all reviewed", so the global
+  // watermark usually covers every symbol. Split the list: the common case
+  // becomes one plain indexed range query, and the `$or` is bounded by the
+  // number of symbols the user reviewed *individually* — not by watchlist size.
+  // The previous version always built one clause per symbol, which turned a
+  // 500-stock watchlist into a 500-clause query on every page load.
+  const overridden: string[] = [];
+  const plain: string[] = [];
+  for (const sym of visible) {
+    (watermarks[sym] != null && watermarks[sym] > globalMs ? overridden : plain).push(sym);
+  }
+
+  const clausesFor = (syms: string[]) =>
+    syms.map((sym) => ({ symbol: sym, createdAt: { $gt: new Date(watermarks[sym]) } }));
+
+  const countIn = async (
+    model: typeof ChangeEventModel | typeof SymbolEventModel,
+    base: Record<string, unknown>
+  ): Promise<number> => {
+    const parts: Promise<number>[] = [];
+    if (plain.length) {
+      parts.push(model.countDocuments({ ...base, symbol: { $in: plain }, createdAt: { $gt: globalSince } }));
+    }
+    if (overridden.length) {
+      parts.push(model.countDocuments({ ...base, $or: clausesFor(overridden) }));
+    }
+    const n = await Promise.all(parts);
+    return n.reduce((a, b) => a + b, 0);
+  };
 
   const [thesis, symbol] = await Promise.all([
-    ChangeEventModel.countDocuments({ userId: user.id, type: { $ne: 'thesis_stale' }, $or: clauses }),
-    SymbolEventModel.countDocuments({ $or: clauses }),
+    countIn(ChangeEventModel, { userId: user.id, type: { $ne: 'thesis_stale' } }),
+    countIn(SymbolEventModel, {}),
   ]);
   return thesis + symbol;
 }
@@ -750,8 +782,14 @@ export async function markSeen(deviceId: string, symbols?: string[]): Promise<{ 
 }
 
 /** On-demand refresh of just this user's symbols — powers the "Refresh now" button. */
-export async function refreshMyWatchlist(): Promise<{ ok: boolean; symbols: number; events: number }> {
+export async function refreshMyWatchlist(): Promise<{ ok: boolean; symbols: number; events: number; error?: string }> {
   const user = await requireUser();
+
+  // Each refresh fans out to the data provider, so this is the most expensive
+  // thing a user can trigger and the first place abuse would show up.
+  const rl = await rateLimit(user.id, 'refresh');
+  if (!rl.allowed) return { ok: false, symbols: 0, events: 0, error: rateLimitMessage(rl) };
+
   await connectToDatabase();
   const items = await Watchlist.find({ userId: user.id }, { symbol: 1 }).lean();
   const results = await refreshSymbols(items.map((i) => i.symbol));
@@ -773,6 +811,9 @@ const UNDELIVERABLE_DOMAINS = ['example.com', 'example.org', 'example.net', 'tes
 
 export async function sendTestDigest(hours = 72): Promise<{ ok: boolean; reason?: string; sentTo?: string }> {
   const user = await requireUser();
+
+  const rl = await rateLimit(user.id, 'email');
+  if (!rl.allowed) return { ok: false, reason: rateLimitMessage(rl) };
 
   if (!process.env.NODEMAILER_EMAIL || !process.env.NODEMAILER_PASSWORD) {
     return { ok: false, reason: 'Email isn’t configured — set NODEMAILER_EMAIL and NODEMAILER_PASSWORD in .env' };

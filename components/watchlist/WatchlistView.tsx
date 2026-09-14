@@ -106,6 +106,10 @@ export default function WatchlistView() {
     setRefreshing(true);
     try {
       const res = await refreshMyWatchlist();
+      if (!res.ok) {
+        toast.error(res.error || 'Refresh failed');
+        return;
+      }
       toast.success(
         res.events > 0
           ? `Refreshed ${res.symbols} symbols · ${res.events} new update${res.events === 1 ? '' : 's'}`
@@ -491,56 +495,54 @@ export default function WatchlistView() {
         <ChartView entries={filtered} onBack={() => setLayout('table')} />
       ) : (
         <>
-          {/* column-view tabs (table layout only) */}
-          {layout === 'table' && (
-            <div className="flex flex-wrap items-center gap-1 border-b border-gray-700 print:hidden">
-              {TABLE_VIEWS.map((v) => (
-                <button
-                  key={v.key}
-                  onClick={() => setTableView(v.key)}
-                  className={`-mb-px border-b-2 px-4 py-2 text-sm transition-colors ${
-                    tableView === v.key
-                      ? 'border-yellow-500 text-gray-100'
-                      : 'border-transparent text-gray-500 hover:text-gray-300'
-                  }`}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          )}
-
+          {/* One control band. Filters stay hidden on a short list — five chips to
+              triage four stocks is noise, not power. */}
           <div className="flex flex-wrap items-center gap-2 print:hidden">
-            {FILTERS.map((f) => {
-              const count = candidates.filter(f.test).length;
-              return (
-                <button
-                  key={f.key}
-                  onClick={() => setFilter(f.key)}
-                  className={`rounded-full px-3 py-1 text-xs transition-colors ${
-                    filter === f.key
-                      ? 'bg-yellow-500 text-gray-950'
-                      : 'border border-gray-700 text-gray-400 hover:border-gray-500'
-                  }`}
+            {candidates.length >= 4 &&
+              FILTERS.map((f) => {
+                const count = candidates.filter(f.test).length;
+                if (f.key !== 'all' && count === 0) return null; // don't offer empty filters
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilter(f.key)}
+                    className={`rounded-full px-3 py-1 text-xs transition-colors ${
+                      filter === f.key
+                        ? 'bg-yellow-500 text-gray-950'
+                        : 'border border-gray-700 text-gray-400 hover:border-gray-500'
+                    }`}
+                  >
+                    {f.label}
+                    {f.key !== 'all' && <span className="ml-1 opacity-70">{count}</span>}
+                  </button>
+                );
+              })}
+
+            <div className="ml-auto flex items-center gap-2">
+              {layout === 'table' && (
+                <select
+                  value={tableView}
+                  onChange={(e) => setTableView(e.target.value as TableView)}
+                  className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300"
+                  title="Which columns to show"
                 >
-                  {f.label}
-                  {f.key !== 'all' && count > 0 && <span className="ml-1 opacity-70">{count}</span>}
-                </button>
-              );
-            })}
-            {layout === 'cards' ? (
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as SortKey)}
-                className="ml-auto rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300"
-              >
-                {SORTS.map((s) => (
-                  <option key={s.key} value={s.key}>Sort: {s.label}</option>
-                ))}
-              </select>
-            ) : (
-              <span className="ml-auto text-xs text-gray-600">click a column header to sort</span>
-            )}
+                  {TABLE_VIEWS.map((v) => (
+                    <option key={v.key} value={v.key}>{v.label} columns</option>
+                  ))}
+                </select>
+              )}
+              {layout === 'cards' && candidates.length >= 4 && (
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as SortKey)}
+                  className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300"
+                >
+                  {SORTS.map((x) => (
+                    <option key={x.key} value={x.key}>Sort: {x.label}</option>
+                  ))}
+                </select>
+              )}
+            </div>
           </div>
 
           {/* bulk-action toolbar */}

@@ -158,3 +158,20 @@ test('no prior snapshot: only unconditional signals fire, no false crossings', (
   assert.equal(changes.some((c) => c.type === 'entered_entry_zone'), false);
   assert.ok(changes.some((c) => c.type === 'stale_data'));
 });
+
+test('narration attaches a fresh headline to a level break, but not a stale one', () => {
+  const item = { symbol: 'NVDA', company: 'NVIDIA', invalidationPrice: 100 };
+  const prev = { price: 105, newsHash: 'a' };
+
+  // Fresh headline → stitched into the sentence.
+  const fresh = detectChanges(prev, { price: 95, newsHash: 'b', topHeadline: 'Fed holds rates steady' }, item, {});
+  const broke = fresh.find((c) => c.type === 'invalidation_breached');
+  assert.ok(broke, 'expected an invalidation event');
+  assert.match(broke!.detail, /Likely related: "Fed holds rates steady"/);
+
+  // Same headline as before → no causal claim.
+  const stale = detectChanges(prev, { price: 95, newsHash: 'a', topHeadline: 'Fed holds rates steady' }, item, {});
+  const broke2 = stale.find((c) => c.type === 'invalidation_breached');
+  assert.ok(broke2);
+  assert.doesNotMatch(broke2!.detail, /Likely related/);
+});

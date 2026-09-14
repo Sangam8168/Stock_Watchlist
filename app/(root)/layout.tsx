@@ -1,4 +1,5 @@
 import Header from "@/components/Header";
+import Disclaimer from "@/components/Disclaimer";
 import TickerTape from "@/components/TickerTape";
 import {auth} from "@/lib/better-auth/auth";
 import {headers} from "next/headers";
@@ -23,6 +24,10 @@ const Layout = async ({ children }: { children : React.ReactNode }) => {
             <div className="container py-10">
                 {children}
             </div>
+
+            <footer className="container pb-10">
+                <Disclaimer />
+            </footer>
         </main>
     )
 }

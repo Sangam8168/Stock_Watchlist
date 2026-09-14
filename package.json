@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:db": "node scripts/test-db.mjs",
-    "test": "node --test \"lib/changes/*.test.ts\""
+    "test": "node --test \"lib/**/*.test.ts\""
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.10",

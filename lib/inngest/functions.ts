@@ -3,7 +3,7 @@ import {NEWS_SUMMARY_EMAIL_PROMPT, PERSONALIZED_WELCOME_EMAIL_PROMPT} from "@/li
 import {sendNewsSummaryEmail, sendWelcomeEmail, sendWatchlistDigestEmail} from "@/lib/nodemailer";
 import {getAllUsersForNewsEmail, getUserContactById} from "@/lib/actions/user.actions";
 import {buildUserDigest} from "@/lib/watchlist/digest";
-import {usersWithRecentActivity} from "@/lib/watchlist/digest-dispatch";
+import {activeUserIdPages} from "@/lib/watchlist/digest-dispatch";
 import { getWatchlistSymbolsByEmail } from "@/lib/actions/watchlist.actions";
 import { getNews } from "@/lib/actions/finnhub.actions";
 import { getFormattedTodayDate } from "@/lib/utils";
@@ -169,19 +169,25 @@ export const dispatchWatchlistDigests = inngest.createFunction(
     { id: 'watchlist-digest-dispatch' },
     [ { event: 'app/watchlist.digest' }, { cron: '30 12 * * 1-5' } ],
     async ({ step }) => {
-        const userIds: string[] = await step.run('find-active-users', () => usersWithRecentActivity(24));
-        if (!userIds.length) return { success: true, dispatched: 0 };
-
         const day = new Date().toISOString().slice(0, 10);
         const BATCH = 250;
-        for (let i = 0; i < userIds.length; i += BATCH) {
-            const slice = userIds.slice(i, i + BATCH);
-            await step.sendEvent(`emit-${i / BATCH}`, slice.map((userId) => ({
-                name: 'app/watchlist.digest.user',
-                data: { userId, day },
-            })));
+        let dispatched = 0;
+        let page = 0;
+
+        // Stream pages of active users and emit each as it arrives. Never holds
+        // the full active-user set in memory, so this is flat regardless of
+        // whether the app has a thousand users or a million.
+        for await (const ids of activeUserIdPages(24)) {
+            for (let i = 0; i < ids.length; i += BATCH) {
+                const slice = ids.slice(i, i + BATCH);
+                await step.sendEvent(`emit-${page++}`, slice.map((userId: string) => ({
+                    name: 'app/watchlist.digest.user',
+                    data: { userId, day },
+                })));
+                dispatched += slice.length;
+            }
         }
-        return { success: true, dispatched: userIds.length };
+        return { success: true, dispatched };
     }
 )
 

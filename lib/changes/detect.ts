@@ -114,6 +114,22 @@ export function abnormalMoveThreshold(vol?: VolatilityStats | null): number {
   return Math.max(ABNORMAL_MOVE_FLOOR_PCT, vol.meanAbsChangePct + 2 * vol.stdevChangePct);
 }
 
+
+/**
+ * Fresh coverage that plausibly explains a price move. Returns a trailing
+ * clause ("… after <headline>") so a level break and the news behind it read as
+ * one sentence instead of two facts the user has to connect themselves.
+ * Only used when the news is genuinely new — a stale headline would imply a
+ * causal link that isn't there.
+ */
+function because(prev: SnapshotLike | null, next: SnapshotLike): string {
+  const fresh = !!next.topHeadline && !!next.newsHash && next.newsHash !== prev?.newsHash;
+  if (!fresh) return '';
+  const h = (next.topHeadline as string).replace(/\s+/g, ' ').trim();
+  const short = h.length > 90 ? `${h.slice(0, 88).trimEnd()}…` : h;
+  return ` Likely related: "${short}".`;
+}
+
 export function detectChanges(
   prev: SnapshotLike | null,
   next: SnapshotLike,
@@ -168,7 +184,7 @@ export function detectChanges(
           type: 'entered_entry_zone',
           severity: 80,
           title: `${symbol} entered your entry zone`,
-          detail: `${name} is trading at $${fmt(price)}, inside the $${fmt(entryLow)}–$${fmt(entryHigh)} band you were waiting for.`,
+          detail: `${name} is trading at $${fmt(price)}, inside the $${fmt(entryLow)}–$${fmt(entryHigh)} band you were waiting for.${because(prev, next)}`,
           data: { price, entryLow, entryHigh },
           dedupeKey: `entered_entry_zone:${symbol}:${dayKey(next.asOf)}`,
         });
@@ -184,7 +200,7 @@ export function detectChanges(
           type: 'invalidation_breached',
           severity: 95,
           title: `${symbol} broke your invalidation level`,
-          detail: `${name} ${isShort ? 'rose to' : 'fell to'} $${fmt(price)}, ${isShort ? 'above' : 'below'} the $${fmt(invalidationPrice)} level you set as "thesis is wrong". Time to decide whether it stays on the list.`,
+          detail: `${name} ${isShort ? 'rose to' : 'fell to'} $${fmt(price)}, ${isShort ? 'above' : 'below'} the $${fmt(invalidationPrice)} level you set as "thesis is wrong".${because(prev, next)} Time to decide whether it stays on the list.`,
           data: { price, invalidationPrice, direction: isShort ? 'short' : 'long' },
           dedupeKey: `invalidation_breached:${symbol}:${dayKey(next.asOf)}`,
         });
@@ -200,7 +216,7 @@ export function detectChanges(
           type: 'target_reached',
           severity: 85,
           title: `${symbol} reached your target`,
-          detail: `${name} hit $${fmt(price)}, ${isShort ? 'at or below' : 'at or above'} your $${fmt(targetPrice)} target.`,
+          detail: `${name} hit $${fmt(price)}, ${isShort ? 'at or below' : 'at or above'} your $${fmt(targetPrice)} target.${because(prev, next)}`,
           data: { price, targetPrice, direction: isShort ? 'short' : 'long' },
           dedupeKey: `target_reached:${symbol}:${dayKey(next.asOf)}`,
         });
@@ -227,7 +243,7 @@ export function detectChanges(
         type: 'abnormal_move',
         severity: clampSeverity(45 + Math.min(35, (move - threshold) * 3)),
         title: `${symbol} moved ${dir} ${fmt(move)}% today`,
-        detail: `${name} is ${dir} ${fmt(move)}% at $${fmt(next.price)} — large for this stock.${vsVol} Often means news you haven't seen yet.`,
+        detail: `${name} is ${dir} ${fmt(move)}% at $${fmt(next.price)} — large for this stock.${vsVol}${because(prev, next) || " Often means news you haven't seen yet."}`,
         data: { changePercent: next.changePercent, threshold, price: next.price },
         dedupeKey: `abnormal_move:${symbol}:${dayKey(next.asOf)}`,
       });

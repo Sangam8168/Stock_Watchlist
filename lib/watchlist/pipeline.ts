@@ -241,54 +241,80 @@ export async function refreshSymbols(symbols: string[], concurrency = 4): Promis
 export async function flagStaleTheses(): Promise<number> {
   await connectToDatabase();
   const cutoff = new Date(Date.now() - 30 * 864e5);
-
-  const items = (await Watchlist.find({ category: { $in: ['active', 'developing'] } }).lean()).filter(
-    (i) => new Date(i.addedAt) <= cutoff
-  );
-  if (!items.length) return 0;
-
-  const userIds = [...new Set(items.map((i) => i.userId))];
-  const syms = [...new Set(items.map((i) => i.symbol))];
-
-  // Which (user, symbol) pairs had a thesis-level change, and which symbols had
-  // any symbol-level change, in the window? Either counts as "not gone quiet".
-  const [thesisActive, symbolActive] = await Promise.all([
-    ChangeEventModel.aggregate<{ _id: { userId: string; symbol: string } }>([
-      { $match: { userId: { $in: userIds }, symbol: { $in: syms }, type: { $ne: 'thesis_stale' }, createdAt: { $gt: cutoff } } },
-      { $group: { _id: { userId: '$userId', symbol: '$symbol' } } },
-    ]),
-    SymbolEventModel.distinct('symbol', { symbol: { $in: syms }, createdAt: { $gt: cutoff } }),
-  ]);
-  const activeSet = new Set(thesisActive.map((a) => `${a._id.userId}::${a._id.symbol}`));
-  const activeSymbols = new Set(symbolActive as string[]);
-
   const monthKey = cutoff.toISOString().slice(0, 7);
-  const writes = items
-    .filter((i) => !activeSet.has(`${i.userId}::${i.symbol}`) && !activeSymbols.has(i.symbol))
-    // Explicitly re-reading the thesis counts as attention, even if the market
-    // did nothing — don't nag someone who just told us it still holds.
-    .filter((i) => !i.lastReviewedAt || new Date(i.lastReviewedAt) <= cutoff)
-    .map((i) => {
-      const dedupeKey = `thesis_stale:${i.symbol}:${monthKey}`;
-      return ChangeEventModel.updateOne(
-        { userId: i.userId, dedupeKey },
-        {
-          $setOnInsert: {
-            userId: i.userId,
-            symbol: i.symbol,
-            type: 'thesis_stale',
-            severity: 25,
-            title: `${i.symbol} has gone quiet`,
-            detail: `No meaningful change on ${i.company} in 30+ days. If you'd still add it today, keep it — otherwise cull it so the list stays actionable.`,
-            data: { category: i.category, addedAt: i.addedAt },
-            dedupeKey,
-            createdAt: new Date(),
-          },
-        },
-        { upsert: true }
-      ).catch(() => ({ upsertedCount: 0 }));
-    });
+  const BATCH = 500;
 
-  const results = await Promise.all(writes);
-  return results.reduce((n, r) => n + (r?.upsertedCount ?? 0), 0);
+  // Streamed in batches via a cursor. The previous version did
+  // `Watchlist.find({ category: {...} }).lean()` with no user filter, pulling
+  // every active/developing item for every user into process memory — at a
+  // million users that's tens of millions of documents and a guaranteed OOM.
+  // Filtering by date moved into the query too, rather than in JS afterwards.
+  const cursor = Watchlist.find({
+    category: { $in: ['active', 'developing'] },
+    addedAt: { $lte: cutoff },
+    $or: [{ lastReviewedAt: { $exists: false } }, { lastReviewedAt: { $lte: cutoff } }],
+  })
+    .lean()
+    .batchSize(BATCH)
+    .cursor();
+
+  let flagged = 0;
+  let batch: { userId: string; symbol: string; company: string; category: string; addedAt: Date }[] = [];
+
+  const flush = async () => {
+    if (!batch.length) return;
+    const userIds = [...new Set(batch.map((i) => i.userId))];
+    const syms = [...new Set(batch.map((i) => i.symbol))];
+
+    // Scoped to this batch, so both queries stay small regardless of total size.
+    const [thesisActive, symbolActive] = await Promise.all([
+      ChangeEventModel.aggregate<{ _id: { userId: string; symbol: string } }>([
+        { $match: { userId: { $in: userIds }, symbol: { $in: syms }, type: { $ne: 'thesis_stale' }, createdAt: { $gt: cutoff } } },
+        { $group: { _id: { userId: '$userId', symbol: '$symbol' } } },
+      ]),
+      SymbolEventModel.distinct('symbol', { symbol: { $in: syms }, createdAt: { $gt: cutoff } }),
+    ]);
+    const activeSet = new Set(thesisActive.map((a) => `${a._id.userId}::${a._id.symbol}`));
+    const activeSymbols = new Set(symbolActive as string[]);
+
+    const ops = batch
+      .filter((i) => !activeSet.has(`${i.userId}::${i.symbol}`) && !activeSymbols.has(i.symbol))
+      .map((i) => {
+        const dedupeKey = `thesis_stale:${i.symbol}:${monthKey}`;
+        return {
+          updateOne: {
+            filter: { userId: i.userId, dedupeKey },
+            update: {
+              $setOnInsert: {
+                userId: i.userId,
+                symbol: i.symbol,
+                type: 'thesis_stale',
+                severity: 25,
+                title: `${i.symbol} has gone quiet`,
+                detail: `No meaningful change on ${i.company} in 30+ days. If you'd still add it today, keep it — otherwise cull it so the list stays actionable.`,
+                data: { category: i.category, addedAt: i.addedAt },
+                dedupeKey,
+                createdAt: new Date(),
+              },
+            },
+            upsert: true,
+          },
+        };
+      });
+
+    if (ops.length) {
+      // One round-trip per batch instead of one per item.
+      const res = await ChangeEventModel.bulkWrite(ops as never, { ordered: false }).catch(() => null);
+      flagged += res?.upsertedCount ?? 0;
+    }
+    batch = [];
+  };
+
+  for await (const doc of cursor) {
+    batch.push(doc as never);
+    if (batch.length >= BATCH) await flush();
+  }
+  await flush();
+
+  return flagged;
 }
