@@ -9,11 +9,13 @@ import { WatchedSymbolModel } from '@/database/models/watchedSymbol.model';
 import { ChangeEventModel } from '@/database/models/changeEvent.model';
 import { SymbolEventModel } from '@/database/models/symbolEvent.model';
 import { SeenStateModel, GLOBAL_SEEN_KEY } from '@/database/models/seenState.model';
+import { ThesisRevisionModel } from '@/database/models/thesisRevision.model';
 import { auth } from '@/lib/better-auth/auth';
 import { refreshSymbols, bumpWatchedSymbol } from '@/lib/watchlist/pipeline';
 import { loadChangeEvents, type MergedEvent } from '@/lib/watchlist/changes-read';
 import { tradingDaysUntil } from '@/lib/market';
 import { filterEvents, clampSensitivity, DEFAULT_PREFS, type AlertPrefs } from '@/lib/changes/preferences';
+import { diffThesis, isLoosening, type ThesisFields } from '@/lib/changes/revision';
 import { log } from '@/lib/observability/logger';
 import { rateLimit, rateLimitMessage } from '@/lib/observability/rate-limit';
 
@@ -631,8 +633,33 @@ export async function updateWatchlistItem(
   if (patch.alertTone === 'signal' || patch.alertTone === 'all') fields.alertTone = patch.alertTone;
 
   const sym = symbol.trim().toUpperCase();
+
+  // Read the current version first so the trail records what actually moved.
+  const before = await Watchlist.findOne({ userId: user.id, symbol: sym }).lean();
+
   const { $set, $unset } = splitSetUnset(fields);
   await Watchlist.updateOne({ userId: user.id, symbol: sym }, { $set, ...($unset ? { $unset } : {}) });
+
+  if (before) {
+    // `fields` holds only what the caller touched, so merge onto the previous
+    // version to compare like with like. null means cleared, undefined means
+    // untouched — diffThesis treats those differently and it matters here.
+    const after: ThesisFields = { ...(before as ThesisFields) };
+    for (const [k, v] of Object.entries(fields)) {
+      if (k === 'updatedAt') continue;
+      (after as Record<string, unknown>)[k] = v === null ? null : v;
+    }
+    const changes = diffThesis(before as ThesisFields, after);
+    if (changes.length) {
+      const dir = (after.direction ?? before.direction ?? 'long') as 'long' | 'short';
+      await ThesisRevisionModel.create({
+        userId: user.id,
+        symbol: sym,
+        changes,
+        loosened: changes.some((c) => isLoosening(c, dir)),
+      }).catch((e) => log.warn('revision.write_failed', { symbol: sym }, e));
+    }
+  }
   if (patch.category === 'active') await bumpWatchedSymbol(sym, 0, true);
   revalidatePath('/watchlist');
   revalidatePath(`/stocks/${sym}`);
@@ -772,6 +799,28 @@ export async function setAlertPrefs(
   );
   revalidatePath('/watchlist');
   return { ok: res.matchedCount > 0 };
+}
+
+/**
+ * The decision trail for one symbol, newest first. Shows how the user's own
+ * thinking moved — which is the context you want when a thesis finally breaks.
+ */
+export async function getThesisRevisions(
+  symbol: string,
+  limit = 20
+): Promise<{ createdAt: string; loosened: boolean; changes: { field: string; from: string | number | null; to: string | number | null }[] }[]> {
+  const user = await getUser();
+  if (!user) return [];
+  await connectToDatabase();
+  const rows = await ThesisRevisionModel.find({ userId: user.id, symbol: symbol.trim().toUpperCase() })
+    .sort({ createdAt: -1 })
+    .limit(Math.min(limit, 100))
+    .lean();
+  return rows.map((r) => ({
+    createdAt: new Date(r.createdAt).toISOString(),
+    loosened: !!r.loosened,
+    changes: (r.changes ?? []).map((c) => ({ field: c.field, from: c.from ?? null, to: c.to ?? null })),
+  }));
 }
 
 /** Move selected symbols into a list, creating it implicitly if it's new. */
