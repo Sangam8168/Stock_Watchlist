@@ -21,7 +21,7 @@ export default function SteelmanButton({ symbol, direction }: { symbol: string; 
       if (res.ok && res.points) setPoints(res.points);
       else toast.error(res.reason || 'Could not generate the other side');
     } catch {
-      toast.error('Could not reach the AI service');
+      toast.error('Could not generate the other side right now');
     } finally {
       setLoading(false);
     }
@@ -49,8 +49,8 @@ export default function SteelmanButton({ symbol, direction }: { symbol: string; 
           ))}
         </ul>
         <p className="mt-2 border-t border-gray-800 pt-2 text-[10px] leading-relaxed text-gray-600">
-          AI-generated from your thesis, with no access to live market data. Points that depend on
-          current conditions need verifying. Not advice.
+          Generated from your thesis alone &mdash; no live market data. Anything here that depends on
+          current conditions needs checking. Not advice.
         </p>
       </div>
     );

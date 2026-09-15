@@ -72,7 +72,7 @@ export async function getBearCase(symbol: string): Promise<BearCase> {
 
   const key = process.env.GEMINI_API_KEY;
   if (!key) {
-    return { ok: false, reason: 'AI review isn’t configured — set GEMINI_API_KEY to enable it.' };
+    return { ok: false, reason: 'Not configured — set GEMINI_API_KEY to enable this.' };
   }
 
   // Each call costs a model invocation; this is the most expensive per-click
@@ -110,7 +110,7 @@ export async function getBearCase(symbol: string): Promise<BearCase> {
 
     if (!res.ok) {
       log.error('steelman.provider_error', new Error(`HTTP ${res.status}`), { symbol: item.symbol });
-      return { ok: false, reason: 'The AI service is unavailable right now.' };
+      return { ok: false, reason: 'That service is unavailable right now.' };
     }
 
     const data = await res.json();

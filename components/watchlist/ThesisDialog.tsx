@@ -239,7 +239,7 @@ export default function ThesisDialog({
                 onClick={() => setPasteOpen(true)}
                 className="text-xs text-gray-400 transition-colors hover:text-yellow-500"
               >
-                ✨ Paste a note instead &mdash; we&rsquo;ll fill these in
+                Paste a note instead &mdash; we&rsquo;ll fill these in
               </button>
             ) : (
               <>
