@@ -31,6 +31,7 @@ import WatchlistOptions from '@/components/watchlist/WatchlistOptions';
 import ChartView from '@/components/watchlist/ChartView';
 import AddSymbol from '@/components/watchlist/AddSymbol';
 import WatchlistNav from '@/components/watchlist/WatchlistNav';
+import ListSwitcher from '@/components/watchlist/ListSwitcher';
 import Reveal from '@/components/Reveal';
 
 const CATEGORY_ORDER: WatchlistCategoryName[] = ['active', 'developing', 'earnings', 'longterm', 'speculative'];
@@ -378,61 +379,24 @@ export default function WatchlistView() {
         </div>
       )}
 
-      {/* Named lists. Derived from the rows themselves, so there's nothing to
-          create or delete — a list exists exactly while something is in it. */}
-      <div className="flex flex-wrap items-center gap-1 border-b border-gray-700 print:hidden">
-        {lists.map((l) => (
-          <button
-            key={l.name}
-            onClick={() => setActiveList(l.name)}
-            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors ${
-              activeList === l.name
-                ? 'border-yellow-500 text-gray-100'
-                : 'border-transparent text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            {l.name}
-            <span className={`rounded-full px-1.5 text-[10px] ${activeList === l.name ? 'bg-gray-700 text-gray-300' : 'text-gray-600'}`}>
-              {l.count}
-            </span>
-          </button>
-        ))}
-        {activeList !== 'Main' && (
-          <span className="ml-1 flex items-center gap-0.5">
-            <button
-              onClick={renameActiveList}
-              title={`Rename "${activeList}"`}
-              className="rounded p-1.5 text-gray-600 transition-colors hover:bg-gray-800 hover:text-gray-300"
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={deleteActiveList}
-              title={`Delete "${activeList}" (stocks move back to Main)`}
-              className="rounded p-1.5 text-gray-600 transition-colors hover:bg-gray-800 hover:text-red-400"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </span>
-        )}
-        <button
-          onClick={() => {
-            const name = window.prompt('Name your new list (e.g. "AI plays", "Dividends")')?.trim();
-            if (!name) return;
-            if (lists.some((l) => l.name.toLowerCase() === name.toLowerCase())) {
-              toast.error(`You already have a list called "${name}"`);
-              return;
-            }
-            setDraftLists((d) => [...d, name]);
-            setActiveList(name);
-            toast.success(`"${name}" created — add a stock below, or move existing ones from the Table view`);
-          }}
-          className="ml-2 rounded-md border border-dashed border-gray-600 px-2.5 py-1 text-xs font-medium text-gray-300 transition-colors hover:border-yellow-500 hover:bg-yellow-500/10 hover:text-yellow-500"
-          title="Create a new list"
-        >
-          + New list
-        </button>
-      </div>
+      <ListSwitcher
+        lists={lists}
+        active={activeList}
+        onSelect={setActiveList}
+        onRename={renameActiveList}
+        onDelete={deleteActiveList}
+        onCreate={() => {
+          const name = window.prompt('Name your new list (e.g. "AI plays", "Dividends")')?.trim();
+          if (!name) return;
+          if (lists.some((l) => l.name.toLowerCase() === name.toLowerCase())) {
+            toast.error(`You already have a list called "${name}"`);
+            return;
+          }
+          setDraftLists((d) => [...d, name]);
+          setActiveList(name);
+          toast.success(`"${name}" created — add a stock below, or move existing ones in`);
+        }}
+      />
 
       <div className="print:hidden"><AddSymbol onAdded={load} list={activeList} /></div>
 
@@ -645,7 +609,7 @@ export default function WatchlistView() {
                 </div>
                 {items.map((entry, i) => (
                   <Reveal key={entry.symbol} delay={Math.min(i * 50, 250)}>
-                    <WatchlistRow entry={entry} deviceId={deviceId} onChange={load} />
+                    <WatchlistRow entry={entry} deviceId={deviceId} onChange={load} lists={lists} />
                   </Reveal>
                 ))}
               </section>
@@ -654,7 +618,7 @@ export default function WatchlistView() {
             <div className="space-y-3">
               {filtered.map((entry, i) => (
                 <Reveal key={entry.symbol} delay={Math.min(i * 50, 250)}>
-                  <WatchlistRow entry={entry} deviceId={deviceId} onChange={load} />
+                  <WatchlistRow entry={entry} deviceId={deviceId} onChange={load} lists={lists} />
                 </Reveal>
               ))}
             </div>

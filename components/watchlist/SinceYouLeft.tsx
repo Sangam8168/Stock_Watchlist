@@ -3,10 +3,11 @@
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { Check, ChevronDown, BellOff, Trash2, ArrowRight } from 'lucide-react';
+import { Check, ChevronDown, BellOff, Trash2, ArrowRight, Play } from 'lucide-react';
 import { markSeen, removeFromWatchlist, snoozeWatchlistItem } from '@/lib/actions/watchlist.actions';
 import { notifySeenChanged } from '@/components/watchlist/WatchlistNavLink';
 import { severityTier, TIER_META, CHANGE_TYPE_LABEL, timeAgo, whenExactly, fmtDelta } from '@/lib/changes/display';
+import StoryMode from '@/components/watchlist/StoryMode';
 
 interface Props {
   digest: SinceYouLeftDigest;
@@ -18,6 +19,7 @@ interface Props {
 export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChange }: Props) {
   const [pending, startTransition] = useTransition();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [story, setStory] = useState(false);
   const { counts, groups, lastVisit } = digest;
 
   const after = onItemChange ?? onReviewed;
@@ -96,6 +98,17 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
   }
 
   return (
+    <>
+      {story && (
+        <StoryMode
+          digest={digest}
+          deviceId={deviceId}
+          onClose={() => {
+            setStory(false);
+            onReviewed();
+          }}
+        />
+      )}
     <section className="rounded-xl border border-gray-700 bg-gray-800/60 overflow-hidden">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-700 p-5">
         <div>
@@ -108,13 +121,22 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
             {groups.length === 1 ? '' : 's'}
           </p>
         </div>
-        <button
-          onClick={reviewAll}
-          disabled={pending}
-          className="flex items-center gap-1.5 rounded-md border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:border-yellow-500 hover:text-yellow-500 disabled:opacity-50"
-        >
-          <Check className="h-4 w-4" /> Mark all reviewed
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setStory(true)}
+            title="One change per card — a 30-second catch-up"
+            className="flex items-center gap-1.5 rounded-md bg-yellow-500 px-3 py-1.5 text-sm font-medium text-gray-950 hover:opacity-90"
+          >
+            <Play className="h-4 w-4" /> Catch me up
+          </button>
+          <button
+            onClick={reviewAll}
+            disabled={pending}
+            className="flex items-center gap-1.5 rounded-md border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:border-yellow-500 hover:text-yellow-500 disabled:opacity-50"
+          >
+            <Check className="h-4 w-4" /> Mark all reviewed
+          </button>
+        </div>
       </header>
 
       <div className="grid grid-cols-2 gap-px bg-gray-700 sm:grid-cols-4">
@@ -238,6 +260,7 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
         })}
       </ul>
     </section>
+    </>
   );
 }
 

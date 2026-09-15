@@ -7,7 +7,7 @@ import { Pencil, Trash2, AlertTriangle, Clock, BellOff, Bell } from 'lucide-reac
 import ThesisDialog from '@/components/watchlist/ThesisDialog';
 import ThesisMeter from '@/components/watchlist/ThesisMeter';
 import Sparkline from '@/components/watchlist/Sparkline';
-import { removeFromWatchlist, markSeen, snoozeWatchlistItem } from '@/lib/actions/watchlist.actions';
+import { removeFromWatchlist, markSeen, snoozeWatchlistItem, bulkMoveToList } from '@/lib/actions/watchlist.actions';
 import { fmtPrice, fmtPct, fmtMarketCap, severityTier, TIER_META, timeAgo } from '@/lib/changes/display';
 
 const SNOOZE_OPTIONS: { label: string; days: number }[] = [
@@ -20,10 +20,13 @@ export default function WatchlistRow({
   entry,
   deviceId,
   onChange,
+  lists = [],
 }: {
   entry: WatchlistEntry;
   deviceId: string;
   onChange: () => void;
+  /** Available lists, so a row can offer "move to" without another request. */
+  lists?: { name: string; count: number }[];
 }) {
   const [pending, startTransition] = useTransition();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
@@ -161,6 +164,30 @@ export default function WatchlistRow({
             </button>
           }
         />
+
+        {/* Moving a stock between lists used to live only in the Table view's
+            bulk toolbar, which meant you had to know it existed. */}
+        <div className="relative">
+          <select
+            value=""
+            onChange={(e) => {
+              const target = e.target.value === '__new'
+                ? window.prompt('Move to which list?')?.trim()
+                : e.target.value;
+              e.target.value = '';
+              if (!target || target === entry.list) return;
+              act(() => bulkMoveToList([entry.symbol], target), `${entry.symbol} moved to "${target}"`);
+            }}
+            title={`Currently in "${entry.list}"`}
+            className="cursor-pointer appearance-none rounded bg-transparent pr-1 text-xs text-gray-500 outline-none hover:text-yellow-500"
+          >
+            <option value="">⇢ Move to list…</option>
+            {lists.filter((l) => l.name !== entry.list).map((l) => (
+              <option key={l.name} value={l.name}>{l.name}</option>
+            ))}
+            <option value="__new">+ New list…</option>
+          </select>
+        </div>
 
         <div className="relative">
           {muted ? (
