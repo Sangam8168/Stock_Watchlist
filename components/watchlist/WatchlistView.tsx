@@ -32,6 +32,7 @@ import ChartView from '@/components/watchlist/ChartView';
 import AddSymbol from '@/components/watchlist/AddSymbol';
 import WatchlistNav from '@/components/watchlist/WatchlistNav';
 import ListSwitcher from '@/components/watchlist/ListSwitcher';
+import GuidedFirstThesis from '@/components/watchlist/GuidedFirstThesis';
 import Reveal from '@/components/Reveal';
 
 const CATEGORY_ORDER: WatchlistCategoryName[] = ['active', 'developing', 'earnings', 'longterm', 'speculative'];
@@ -74,6 +75,7 @@ export default function WatchlistView() {
   const [demoTools, setDemoTools] = useState(false);
   const [activeList, setActiveList] = useState<string>('Main');
   const [draftLists, setDraftLists] = useState<string[]>([]);
+  const [guided, setGuided] = useState(true);
 
   const load = useCallback(async () => {
     if (!deviceId) return;
@@ -415,6 +417,20 @@ export default function WatchlistView() {
           </p>
         </div>
       ) : candidates.length === 0 ? (
+        guided ? (
+          <div className="mx-auto max-w-2xl space-y-4">
+            <div className="text-center">
+              <h2 className="text-lg font-semibold text-gray-100">
+                Let&rsquo;s set up your first one together
+              </h2>
+              <p className="mx-auto mt-1 max-w-md text-sm text-gray-500">
+                Four short questions. By the end you&rsquo;ll have a real thesis the app can
+                actually watch &mdash; and you&rsquo;ll know what each number is for.
+              </p>
+            </div>
+            <GuidedFirstThesis onDone={load} onSkip={() => setGuided(false)} />
+          </div>
+        ) : (
         <div className="rounded-xl border border-dashed border-gray-700 p-8">
           <div className="mx-auto max-w-2xl">
             <h2 className="text-center text-lg font-semibold text-gray-100">
@@ -458,6 +474,7 @@ export default function WatchlistView() {
             </div>
           </div>
         </div>
+        )
       ) : layout === 'chart' ? (
         <ChartView entries={filtered} onBack={() => setLayout('table')} />
       ) : (
