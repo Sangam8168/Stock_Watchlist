@@ -69,13 +69,28 @@ Marking things seen is explicit (`Mark all reviewed` / per-symbol `Reviewed`), a
 
 ## Tech stack
 
-- **Next.js 15** (App Router, Server Actions) · **TypeScript**
-- **MongoDB** + **Mongoose** — `watchlist`, `snapshots`, `changeevents`, `seenstates`
-- **Better Auth** — email/password
-- **Inngest** — the 15-min ingestion + detection cron, the daily digest, housekeeping
-- **Finnhub** — market data (free tier is enough)
-- **Tailwind CSS** + Radix primitives
-- **Gemini** / **Nodemailer** — welcome + digest emails (optional for the watchlist itself)
+Versions are what's installed, not what's aspirational.
+
+| Choice | Why it's here | What it costs |
+|---|---|---|
+| **Next.js 15.5** · **React 19** | Server actions put the data layer and the UI in one codebase — no REST layer to keep in sync with yourself on a solo build | Ties you to a Node host |
+| **TypeScript 5.9**, strict | The engine passes snapshots between twelve modules; strict typing is what made renaming and splitting them safe | Slower to write |
+| **MongoDB 8** + **Mongoose** | Snapshots are semi-structured documents from an API whose shape we don't control, and TTL indexes gave bounded retention for free | For users and watchlist rows, Postgres would fit better |
+| **Inngest 3** | Scheduled jobs with retries, step-level visibility and a one-line concurrency cap, without running our own worker | A third party in the critical path |
+| **Better Auth 1.7.3** | Email and Google in one library, with account linking. Upgraded from 1.3.7 to clear security advisories | Younger than the alternatives |
+| **Tailwind 4** + Radix | One file of design tokens, no stylesheet drift across 60 components | Noisy markup |
+| **`node --test`** | Ships with Node and reads TypeScript directly — 142 tests, zero test dependencies | No coverage report out of the box |
+
+**Data sources.** Finnhub for US listings (9 endpoints, free tier is enough).
+A keyless public endpoint for NSE and BSE, because Finnhub returns a null price
+for every Indian listing on this plan. Frankfurter for exchange rates. Gemini
+and Nodemailer for the written digest — both optional.
+
+**Seven collections**: `watchlist` (the thesis), `snapshots` (time series),
+`watchedsymbols` (refcount + cached latest), `symbolevents` (shared across
+watchers), `changeevents` (per user), `seenstates` (per-device watermarks),
+`thesisrevisions` (your own edit history). Every one that grows with time has a
+TTL.
 
 ---
 
@@ -179,12 +194,31 @@ so the digest lights up regardless of market hours or whether you have an API ke
 ## Tests
 
 ```bash
-npm test        # change-detection engine — node:test, 12 cases
+npm test        # 142 tests, node:test — no database, no network
 ```
 
-The engine (`lib/changes/detect.ts`) is a pure function of
-`(previous snapshot, current snapshot, thesis)` — no I/O, no clock, no DB — so it
-is fully unit-tested and replayable.
+There are 142 and not a dozen because **the whole core is pure**. Twelve modules
+in `lib/changes/` take data and return data — no database, no network, no clock
+unless it's injected — so a test is three object literals and an assertion.
+
+| Module | Decides | Tests |
+|---|---|---|
+| `changes/detect.ts` | what changed — 14 event types | 17 |
+| `changes/explain.ts` | why an event ranks where it does | 13 |
+| `changes/confidence.ts` | how much to trust a quote; provider self-contradiction | 12 |
+| `changes/coverage.ts` | whether silence can honestly be reported as quiet | 12 |
+| `changes/concentration.ts` | sector concentration, currency-safe | 11 |
+| `changes/health.ts` | how the list as a whole is doing | 10 |
+| `changes/exchange.ts` | venue, market hours and currency per ticker | 9 |
+| `changes/parse-thesis.ts` | pulling levels out of a pasted sentence | 9 |
+| `changes/currency.ts` · `preferences.ts` · `revision.ts` | conversion · filtering · thesis diffs | 24 |
+| `changes/display.ts` | shared formatting | 6 |
+| `market.ts` | US trading days and hours | 10 |
+| `observability/logger.ts` | redaction of secret-shaped values | 5 |
+| `watchlist/export.ts` | CSV escaping | 4 |
+
+I/O lives at the edges: one pipeline module, the server actions, the models.
+The honest gap is that the React layer is verified by hand, not by test.
 
 ---
 

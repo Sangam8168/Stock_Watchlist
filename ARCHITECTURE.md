@@ -26,6 +26,7 @@ unless injected. That's what makes it replayable and unit-testable
 | `catalyst_imminent` | earnings or your catalyst date ≤ 5 **trading** days out | 55–70 |
 | `abnormal_move` | `|Δ%| ≥ max(5%, mean + 2·σ of the stock's own daily moves)` — **only during market hours** | 45–80 |
 | `new_52w_high` / `new_52w_low` | price prints a fresh 52-week extreme | 50–52 |
+| `approaching_52w_high` / `_low` | price **crosses into** the top or bottom 2% of the 52-week range, having been outside it — fires once on entry, not every cycle it loiters there. Quieter than the break on purpose: the break is a fact, this arrives while you can still act | 35–38 |
 | `news_break` | headline set **hash changes** *and* article count grows | 30–55 |
 | `valuation_shift` | trailing P/E moves 15–150% between sane P/E levels (< 250) — beyond that it's a data artifact, suppressed | 40 |
 | `corporate_action` | price gap between checks lands on a round split ratio (2,3,…10×) or exceeds 60% — suppresses the price-derived signals and tells you to re-check your levels | 45 |
@@ -49,42 +50,60 @@ is logged once even though the poll runs every 15 minutes. A unique
 ## 2. Architecture — read/write split
 
 ```
-                 ┌─────────────── Inngest cron (*/15) ───────────────┐
-                 │  getDistinctWatchedSymbols()   ← O(symbols), not   │
-                 │        │                          O(users×symbols) │
-                 │        ▼                                           │
-                 │  refreshSymbol(sym):                               │
-                 │    buildSnapshot(sym)  ─ Finnhub: quote, profile,  │
-                 │        │                  metrics, earnings, news  │
-                 │        ▼                                           │
-                 │    Snapshot.create(...)         (append-only, TTL 90d)
-                 │        │                                           │
-                 │        ▼   for each user watching sym:             │
-                 │    detectChanges(prev, next, thesis)               │
-                 │        │                                           │
-                 │        ▼                                           │
-                 │    ChangeEvent.upsert(dedupeKey)  (materialized feed)
-                 └────────────────────────┬──────────────────────────┘
-                                          │
-   page loads never call Finnhub ────────▶│
-                                          ▼
+  ┌──────────────────────── Inngest cron (*/15, concurrency 1) ───────────────────────┐
+  │                                                                                    │
+  │  getDistinctWatchedSymbols()          ← O(distinct symbols), never O(users×symbols) │
+  │        │                                                                            │
+  │        ▼   route on the ticker suffix                                               │
+  │  buildSnapshot(sym) ──┬── .NS / .BO → getIndianQuote()   (keyless, INR)             │
+  │        │              └── everything else → Finnhub      (9 endpoints)              │
+  │        │                                                                            │
+  │        ▼   guards: skip the fetch under 45s old; skip the write if price            │
+  │  Snapshot.create()     and newsHash are both unchanged   (append-only, TTL 90d)     │
+  │        │                                                                            │
+  │        ├── Pass 1: detectChanges(...).filter(!isThesisScoped)                       │
+  │        │           → SymbolEvent.upsert(dedupeKey)   ONE row, every watcher reads it │
+  │        │                                                                            │
+  │        └── Pass 2: for users who actually set a level                               │
+  │                    detectChanges(...).filter(isThesisScoped)                        │
+  │                    → ChangeEvent.upsert(userId, dedupeKey)                          │
+  └────────────────────────────────────────┬───────────────────────────────────────────┘
+                                           │
+   page loads never call a provider ──────▶│
+                                           ▼
    getWatchlist(deviceId) / getSinceYouLeft(deviceId)
-     = join(Watchlist, latest Snapshot, ChangeEvent) filtered by SeenState
+     = join(Watchlist, WatchedSymbol.latest, SymbolEvent, ChangeEvent)
+       filtered at read time by SeenState watermarks and per-user alert prefs
 ```
 
-- **Ingestion is deduped across users.** 10,000 people watching `AAPL` cost
-  exactly one fetch. Snapshots are shared; theses are per-user.
-- **Reads are pure DB joins.** The dashboard, the watchlist, and the "while you
-  were away" digest all read materialized rows. No provider call on the hot path.
-- **Bounded storage.** `snapshots` and `changeEvents` have TTL indexes (90 / 120
-  days), so the time series stays flat regardless of age.
-- **On-demand path** ([`refreshMyWatchlist`](lib/actions/watchlist.actions.ts))
-  reuses the exact same `refreshSymbols` pipeline for just the current user's
-  symbols — powers the "Refresh now" button.
+**The event split is the whole design.** A symbol-level fact ("up 8% today") is
+identical for everyone watching it, so it is computed once and stored once.
+A thesis-level fact ("crossed *your* invalidation") can only be per user, and is
+only computed for users who set that level — which most never do. Detection cost
+therefore tracks distinct symbols, not user count.
 
-Collections: `watchlist` (thesis), `snapshots` (time series), `changeevents`
-(feed), `seenstates` (caught-up watermarks). Models in
-[`database/models/`](database/models).
+**Per-user alert preferences filter at read time, not write time.** Filtering
+during detection would put user count back into the write path and undo the
+property above. The trade is read CPU for flat writes
+([`lib/changes/preferences.ts`](lib/changes/preferences.ts)).
+
+**Two providers, one snapshot shape.** Finnhub returns a null price for every
+NSE and BSE listing on this plan, so Indian tickers route to a second source
+([`lib/actions/yahoo.actions.ts`](lib/actions/yahoo.actions.ts)). Both paths
+converge on `BuiltSnapshot`, so nothing downstream — detection, health,
+coverage, the digest — knows a second provider exists. Adding a third venue is a
+row in [`lib/changes/exchange.ts`](lib/changes/exchange.ts), not a rewrite.
+
+**Bounded storage.** Every collection that grows with time has a TTL: snapshots
+90d, events 120d, seen-state 180d, thesis revisions 730d.
+
+**On-demand path.** `refreshMyWatchlist` reuses the same `refreshSymbols`
+pipeline for one user's symbols, rate-limited to 10 calls a minute.
+
+Seven collections: `watchlist` (the thesis), `snapshots` (time series),
+`watchedsymbols` (refcount + cached latest), `symbolevents` (shared),
+`changeevents` (per user), `seenstates` (watermarks), `thesisrevisions`
+(your own edit history). Models in [`database/models/`](database/models).
 
 ---
 
@@ -99,6 +118,19 @@ in [`seenState.model.ts`](database/models/seenState.model.ts):
 - An event is **unseen** if `createdAt > max(perSymbolWatermark, globalWatermark)`.
 - `markSeen` uses `$max` — monotonic. A slow or stale request can never move the
   watermark backwards and re-surface things you've already reviewed.
+- A **new device inherits** rather than resets — it seeds from the furthest-along
+  device on the account, so a new phone doesn't greet you with months of unread.
+- **Two different things, deliberately not conflated.** `__global` is how far
+  you've *reviewed*, and it alone decides what counts as new. `__visit` is when
+  you were last *here*, and it is only ever used for the "you last checked…"
+  wording. They used to be the same row, which meant "since your last visit"
+  was measured from the last time you pressed a button — it told someone who had
+  visited a minute ago that there were 31 updates since their last visit.
+- **Reading counts as reviewing.** A group is marked read once it has been at
+  least half on screen for 1.5 continuous seconds in a foreground tab. Rendering
+  below the fold doesn't count, and neither does flicking past — the whole point
+  of a watermark is that nothing disappears unseen. It marks on the server but
+  doesn't refetch, so the list stays put while you read it.
 - No `localStorage` for the actual data — only the device id. Everything else is
   in Mongo and reconciles on any device.
 
@@ -106,20 +138,61 @@ in [`seenState.model.ts`](database/models/seenState.model.ts):
 
 ## 4. Stale, delayed & conflicting data
 
-Every snapshot records `source`, `asOf` (the provider's timestamp), and a
-computed `stale` flag:
+Four layers, in increasing order of how much we think they matter.
 
-- **Stale** = no quote, or `asOf` is > 20 min behind now **while the US market is
-  open** ([`lib/market.ts`](lib/market.ts) does all clock reasoning in
-  `America/New_York` with a holiday list).
-- The UI shows it explicitly — `delayed · as of 2h ago` — never silently.
-- **Abnormal-move alerts are gated on `isMarketOpen`.** We don't cry wolf about a
-  7% "move" that's really just a stale Friday close being compared to Monday.
-- **Partial provider failure** degrades the row: `source: "finnhub:partial(metrics)"`,
-  the snapshot is still written, detection still runs on what we have.
-- **Conflicting sources** (profile market-cap vs. metrics market-cap disagree
-  > 5%) → the field is tagged in `unconfirmedFields` and badged `unconfirmed` in
-  the UI rather than picking a winner.
+**1 — Per-snapshot staleness.** Every snapshot records `source`, `asOf` (the
+provider's own timestamp) and a computed `stale` flag. Stale means no quote, or
+`asOf` more than 20 minutes behind now *while that symbol's market is open*.
+Clock reasoning is per venue, not per server: an NSE listing is judged against
+09:15–15:30 IST ([`lib/changes/exchange.ts`](lib/changes/exchange.ts)).
+
+**2 — Named unconfirmed fields.** A sub-fetch that fails degrades the row rather
+than the cycle: `source: "finnhub:partial(metrics)"`, the snapshot is still
+written, and the affected fields are listed in `unconfirmedFields` and badged in
+the UI. **A field is never defaulted to zero** — a zero in a price column is a
+lie, a dash is the truth.
+
+**3 — Graded confidence, and the provider contradicting itself.**
+[`lib/changes/confidence.ts`](lib/changes/confidence.ts) scores each quote 0–1,
+derived from the polling interval rather than from invented constants: under one
+cycle old is 1.0, and the floor lands on the same "three missed polls" threshold
+the coverage check uses. One policy, two surfaces.
+
+It also detects a single provider disagreeing with *itself* across endpoints —
+a price above the 52-week high the same provider reports is not a rally, it is
+`/quote` and `/stock/metric` updating on different schedules. A contradiction
+caps confidence below staleness does, because an old price was at least true
+once. For dual-listed Indian names there is a genuine second opinion:
+`checkCrossListing()` compares NSE against BSE, which are independent order
+books.
+
+**4 — The one that matters: silence has two causes.**
+[`lib/changes/coverage.ts`](lib/changes/coverage.ts).
+
+An outage writes no snapshots, so it detects no changes, so the digest is empty —
+and an empty digest renders exactly like "nothing happened". The app would
+reassure the user at precisely the moment it had gone blind, and an outage looks
+identical to a calm market.
+
+So before reporting quiet, the app establishes that it could see. If it could
+not, it says **"Can't confirm"** and names the symbols. Thresholds are
+deliberately asymmetric: three missed 15-minute polls while the market is open,
+96 hours when it is shut — a false alarm costs trust just as much as a false
+all-clear, and prices legitimately do not move over a long weekend.
+
+A **delisted ticker is reported separately** from blindness. Indian listings get
+renamed and demerged often (Zomato became `ETERNAL.NS`; Tata Motors split off
+`TMPV.NS`), and a 404 is permanent. Folding it into the blindness count would
+leave "Can't confirm" showing forever over something only the user can fix — and
+a warning that never clears stops being a warning.
+
+**Abnormal-move alerts are gated on that symbol's market being open**, so a
+stale Friday close compared against Monday never produces a fake 7% move.
+
+**Money is never added across currencies.** Where a list mixes INR and USD
+holdings, sector concentration falls back to weighting by count. A rupee figure
+is roughly 83× a dollar one for comparable value, so summing them would report a
+concentration that does not exist.
 
 ---
 
@@ -127,19 +200,37 @@ computed `stale` flag:
 
 | Concern | Approach |
 |---|---|
-| More users, same symbols | ingestion is O(distinct symbols); snapshots shared |
-| Larger watchlists | reads are indexed joins, capped event windows, category grouping so the UI stays usable at 40+ names |
-| Storage growth | TTL indexes on `snapshots` (90d) and `changeevents` (120d) |
-| Poll cost off-hours | cron self-throttles to hourly when `!isMarketOpen` |
-| Hot symbol lookups | `snapshots (symbol, capturedAt desc)`, `changeevents (userId, symbol, createdAt desc)` |
-| Detection idempotency | unique `(userId, dedupeKey)` — safe to re-run any cycle |
-| Fan-out | `refreshSymbols` batches (20/cron step, 4-wide within a batch) |
+| More users, same symbols | detection is O(distinct symbols); symbol events stored once and read by every watcher |
+| Per-user preferences | applied at read time, so user count never enters the write path |
+| Larger watchlists | indexed joins, capped event windows, per-list slicing from a single digest query |
+| Storage growth | TTL on all five time-growing collections (90 / 120 / 120 / 180 / 730 days) |
+| Poll cost off-hours | cron self-throttles to hourly when the market is shut; full sweep on the hour, active symbols only otherwise |
+| Redundant writes | fetch skipped under 45s; write skipped when price and `newsHash` are both unchanged |
+| Hot lookups | `snapshots (symbol, capturedAt desc)`, `changeevents (userId, symbol, createdAt desc)`, `watchedsymbols.latest` for O(1) current price |
+| Detection idempotency | unique `(userId, dedupeKey)` and `(dedupeKey)` — safe to re-run any cycle; cron pinned to `concurrency: 1` |
+| Fan-out | `refreshSymbols` in batches of 20 per cron step |
+| Digest fan-out | two-stage: a dispatcher finds only users with activity, then one event per user at `concurrency: 5` |
+
+**Two things that only broke past a scale we could test**, both found and fixed:
+
+- **The 16MB ceiling.** Users with recent activity were enumerated with
+  `distinct()`, which returns a single BSON document — and BSON documents cap at
+  16MB, so past roughly half a million users it simply throws. Replaced with an
+  async generator over a `$group` aggregation with `allowDiskUse`.
+- **An OOM in the stale-thesis sweep.** It loaded every user's items into
+  memory. Now it streams a cursor and writes back in `bulkWrite` batches of 500.
+
+**Abuse is bounded per action, priced by cost** — `refresh` 10/min (hits the
+provider), `email` 5/5min (Gmail's own cap), `search` 60/min, `write` 120/min.
+The limiter **fails open**: if its datastore is unreachable, locking every user
+out is a worse outcome than briefly unmetered traffic. You would invert that for
+anything touching money.
 
 ---
 
 ## 6. Deliberately simple
 
-- **One** detection module, pure, ~10 rules. No rules engine, no DSL.
+- **One** detection module, pure, 14 rules. No rules engine, no DSL.
 - Inngest + Mongo TTL indexes instead of a separate scheduler / cache / queue.
 - The daily digest email (`sendWatchlistDigest`, weekday 12:30 UTC) reuses the
   existing `nodemailer` + Inngest setup and reads the **same** `ChangeEvent` rows
@@ -148,6 +239,15 @@ computed `stale` flag:
 - No websockets — a 15-min materialized feed is the right grain for a *watchlist*
   (candidates, not positions). Positions you'd own would need tighter alerting;
   that's the portfolio, a separate list, out of scope here on purpose.
+- **No message queue, no Redis, no microservices, no ML.** The job runs every 15
+  minutes over a few thousand symbols; MongoDB handles that comfortably. Adding
+  Kafka would have been for the CV, not the product.
+- **No test framework.** `node --test` ships with Node and reads TypeScript
+  directly: 142 tests, zero test dependencies. The honest cost is no coverage
+  report.
+- **Where we over-built, for the record:** seven column views and roughly forty
+  columns in the table. That was breadth for its own sake and would be the first
+  thing cut.
 
 ---
 
@@ -223,19 +323,44 @@ DST edges can shift a trading-day countdown by ±1.
 
 ## 8. Where to look
 
+**The pure core** — twelve modules in `lib/changes/`, no I/O in any of them,
+which is why there are 142 tests and not six. A test is three object literals
+and an assertion.
+
+| Module | Decides |
+|---|---|
+| `detect.ts` | what changed — 14 event types, the only module that reads a thesis |
+| `health.ts` | how the list as a whole is doing (broken counts double) |
+| `coverage.ts` | whether silence can honestly be reported as "nothing happened" |
+| `confidence.ts` | how much a quote is worth trusting; provider self-contradiction |
+| `exchange.ts` | which venue a ticker trades on, its hours and its currency |
+| `preferences.ts` | whether this user should see this event |
+| `parse-thesis.ts` | pulling levels out of a pasted sentence (regex, no LLM) |
+| `revision.ts` | diffing a thesis edit, and spotting a loosened invalidation |
+| `concentration.ts` | sector concentration, currency-safe |
+| `currency.ts` | conversion that refuses to guess an unknown source currency |
+| `explain.ts` | why an event is ranked where it is (factors sum to the score) |
+| `display.ts` | formatting every surface shares |
+
 | Area | File |
 |---|---|
-| Change engine (+ tests) | `lib/changes/detect.ts`, `lib/changes/detect.test.ts` |
 | Ingestion + detection pipeline | `lib/watchlist/pipeline.ts` |
-| Snapshot builder (provider) | `lib/actions/market-data.actions.ts` |
-| Market-hours / trading-day math | `lib/market.ts` |
+| Snapshot builder (**not** a server action — see below) | `lib/market-data/snapshot.ts` |
+| Indian market provider | `lib/actions/yahoo.actions.ts` |
 | Watchlist reads/writes + digest | `lib/actions/watchlist.actions.ts` |
-| Cron jobs | `lib/inngest/functions.ts` (`pollWatchlistSymbols`, `sendWatchlistDigest`, `flagStaleThesesDaily`) |
-| Digest email render | `lib/watchlist/digest.ts` |
-| Models | `database/models/{watchlist,snapshot,changeEvent,seenState}.model.ts` |
-| UI | `app/(root)/watchlist/`, `components/watchlist/` |
-| Thesis meter / sparkline / snooze | `components/watchlist/{ThesisMeter,Sparkline,WatchlistRow}.tsx` |
-| Email templates | `lib/nodemailer/{index,templates}.ts` |
-| Demo helpers | `lib/actions/demo.actions.ts` (seed + simulate) |
+| Cron jobs | `lib/inngest/functions.ts` |
+| Rate limiting, structured logging | `lib/observability/` |
+| Models | `database/models/` (seven) |
+| UI | `app/(root)/`, `components/watchlist/`, `components/search/` |
+| Reviewer test bench | `components/watchlist/TestBench.tsx`, `lib/actions/demo.actions.ts` |
 
-Run the engine tests: `npm test`.
+**Two things are deliberately not server actions.** Anything exported from a
+`'use server'` module is a public endpoint any browser can call.
+`buildSnapshot` spends about six provider requests per call, so leaving it
+exported was a free way to drain the API quota — it now lives in
+`lib/market-data/snapshot.ts`. And a lookup that returned any user's watchlist
+from just their email address moved to `lib/watchlist/users.ts`; its only caller
+is a cron. `getQuote` stays an action because the thesis editor needs it, but
+requires a session and is metered.
+
+Run the tests: `npm test` — 142, no database or network required.
