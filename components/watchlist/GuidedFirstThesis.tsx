@@ -155,7 +155,7 @@ export default function GuidedFirstThesis({ onDone, onSkip }: { onDone: () => vo
 
           {step === 'invalidation' && (
             <Question
-              title="At what price would you admit you were wrong?"
+              title="At what price would you change your mind?"
               why="This is the one that matters. When a stock falls, the natural instinct is “even cheaper now” — which is how people ride something all the way down. Choosing the number in advance, while you're calm, is the whole discipline."
               value={inv}
               onChange={setInv}

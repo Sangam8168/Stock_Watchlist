@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getChangeHistory } from '@/lib/actions/watchlist.actions';
 import { severityTier, TIER_META, CHANGE_TYPE_LABEL, timeAgo, whenExactly } from '@/lib/changes/display';
+import EventSource from '@/components/watchlist/EventSource';
+import WhyRanked from '@/components/watchlist/WhyRanked';
 
 const RANGES = [
   { days: 1, label: '24 hours' },
@@ -75,9 +77,9 @@ export default function ChangeHistory({ reloadKey = 0 }: { reloadKey?: number })
       </div>
 
       {rows === null ? (
-        <p className="rounded-lg border border-dashed border-gray-700 p-6 text-center text-sm text-gray-500">Loading…</p>
+        <p className="surface-quiet p-6 text-center text-sm muted">Loading…</p>
       ) : rows.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-gray-700 p-6 text-center text-sm text-gray-500">
+        <p className="surface-quiet p-6 text-center text-sm muted">
           Nothing recorded in this window. Hit “Refresh” or wait for the 15-minute poll.
         </p>
       ) : (
@@ -88,11 +90,11 @@ export default function ChangeHistory({ reloadKey = 0 }: { reloadKey?: number })
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                   {new Date(day).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}
                 </h3>
-                <span className="h-px flex-1 bg-gray-800" />
+                <span className="h-px flex-1 bg-white/5" />
                 <span className="text-xs text-gray-700">{events.length}</span>
               </div>
 
-              <ol className="relative space-y-3 border-l border-gray-800 pl-5">
+              <ol className="relative space-y-3 border-l hairline pl-5">
                 {events.map((e, i) => {
                   const meta = TIER_META[severityTier(e.severity)];
                   return (
@@ -103,6 +105,7 @@ export default function ChangeHistory({ reloadKey = 0 }: { reloadKey?: number })
                           {e.symbol}
                         </Link>
                         <span className="text-xs text-gray-600">{CHANGE_TYPE_LABEL[e.type] ?? e.type}</span>
+                        <WhyRanked event={e} />
                         {e.scope === 'thesis' && (
                           <span className="rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-600">your thesis</span>
                         )}
@@ -111,6 +114,7 @@ export default function ChangeHistory({ reloadKey = 0 }: { reloadKey?: number })
                         </span>
                       </div>
                       <p className="mt-0.5 text-sm text-gray-400">{e.detail}</p>
+                      <EventSource data={e.data} />
                     </li>
                   );
                 })}

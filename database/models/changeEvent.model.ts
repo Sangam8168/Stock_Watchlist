@@ -13,6 +13,8 @@ export const CHANGE_TYPES = [
   'news_break',
   'new_52w_high',
   'new_52w_low',
+  'approaching_52w_high',
+  'approaching_52w_low',
   'valuation_shift',
   'corporate_action',
   'stale_data',

@@ -214,38 +214,41 @@
   .search-btn {
     @apply cursor-pointer px-4 py-2 w-fit flex items-center gap-2 text-sm md:text-base bg-yellow-500 hover:bg-yellow-500 text-black font-medium rounded;
   }
+  /* The palette is a floating surface, so it uses the raised tone; the rest of
+     the app's cards sit on the sunken page behind it. */
   .search-dialog {
-    @apply !bg-gray-800 lg:min-w-[800px] border-gray-600 fixed top-10 left-1/2 -translate-x-1/2 translate-y-10;
+    @apply !bg-[#16181c] lg:min-w-[720px] !border-white/10 fixed top-10 left-1/2 -translate-x-1/2 translate-y-10;
   }
   .search-field {
-    @apply !bg-gray-800 border-b border-gray-600 relative;
+    @apply !bg-[#16181c] border-b !border-white/[0.06] relative;
   }
   .search-list {
-    @apply !bg-gray-800 max-h-[400px];
+    @apply !bg-[#16181c] max-h-[420px] px-2 py-1;
   }
   .search-list-indicator {
-    @apply px-5 py-2
+    @apply px-5 py-2;
   }
   .search-list-empty {
-    @apply py-6 !bg-transparent text-center text-gray-500;
+    @apply py-8 !bg-transparent text-center text-sm text-gray-500;
   }
   .search-input {
-    @apply !bg-gray-800 border-0 text-gray-400 placeholder:text-gray-500 focus:ring-0 text-base h-14 pr-10;
+    @apply !bg-transparent border-0 text-gray-200 placeholder:text-gray-600 focus:ring-0 text-base h-14 pr-10;
   }
   .search-loader {
     @apply absolute right-12 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 animate-spin;
   }
+  /* A section label, not a banner — it should be findable and otherwise silent. */
   .search-count {
-    @apply py-2 px-4 text-sm font-medium text-gray-400 bg-gray-700 border-b border-gray-700;
+    @apply px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-600;
   }
   .search-item {
-    @apply rounded-none my-3 px-1 w-full data-[selected=true]:bg-gray-600;
+    @apply my-0.5 flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 transition-colors data-[selected=true]:bg-white/[0.06];
   }
   .search-item-link {
-    @apply px-2 w-full cursor-pointer border-b border-gray-600 last:border-b-0 transition-colors flex items-center gap-3;
+    @apply w-full cursor-pointer transition-colors flex items-center gap-3;
   }
   .search-item-name {
-    @apply font-medium text-base text-gray-400;
+    @apply font-medium text-base text-gray-300;
   }
   .nav-list {
     @apply flex flex-col sm:flex-row p-2 gap-3 sm:gap-10 font-medium;
@@ -584,3 +587,60 @@ html.no-anim .reveal { opacity: 1; transform: none; }
   .bg-gray-800, .bg-gray-900, .bg-gray-700 { background: #fff !important; }
   .text-gray-100, .text-gray-200, .text-gray-300, .text-gray-400, .text-gray-500 { color: #111 !important; }
 }
+
+/* ---- Surfaces -------------------------------------------------------------
+   The page had roughly sixty elements wrapped in `border border-gray-700`,
+   nested several deep. Each border is a hard 1px line, so the eye reads a grid
+   of boxes before it reads any content — that is what made a fairly ordinary
+   amount of information feel dense.
+
+   These replace borders with *elevation*: each level is a slightly lighter
+   surface than its parent, with generous padding and a soft shadow. Separation
+   is still obvious, but nothing competes for attention. Hairlines are kept only
+   where a real division exists (a table header, a list of peers). */
+
+.surface {
+  background: #16181c;
+  border-radius: 0.875rem;
+  padding: 1.25rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 0 0 1px rgb(255 255 255 / 0.03);
+}
+
+/* Nested inside a .surface — reads as inset rather than as another card. */
+.surface-sunken {
+  background: #0d0f12;
+  border-radius: 0.625rem;
+  padding: 0.875rem;
+}
+
+/* A grouping that needs edges but no weight of its own. */
+.surface-quiet {
+  background: rgb(255 255 255 / 0.02);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+/* Where a division is genuinely structural, make it whisper. */
+.hairline { border-color: rgb(255 255 255 / 0.06) !important; }
+
+/* Secondary text should recede, not just shrink. */
+.muted { color: rgb(148 158 170 / 0.75); }
+
+/* Inputs: the focus ring is the affordance, so the resting state can be quiet. */
+.field-quiet {
+  background: rgb(0 0 0 / 0.25);
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: 0.5rem;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.field-quiet:hover { border-color: rgb(255 255 255 / 0.14); }
+.field-quiet:focus,
+.field-quiet:focus-within {
+  outline: none;
+  background: rgb(0 0 0 / 0.35);
+  border-color: rgb(234 179 8 / 0.6);
+  box-shadow: 0 0 0 3px rgb(234 179 8 / 0.12);
+}
+
+/* More air between the major bands of a page. */
+.page-stack > * + * { margin-top: 1.75rem; }

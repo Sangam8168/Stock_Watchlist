@@ -4,11 +4,13 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { useDeviceId } from '@/hooks/useDeviceId';
+import { useRecordVisit } from '@/hooks/useRecordVisit';
 import { getSinceYouLeft } from '@/lib/actions/watchlist.actions';
 import { timeAgo } from '@/lib/changes/display';
 
 export default function SinceYouLeftStrip() {
   const deviceId = useDeviceId();
+  const previousVisit = useRecordVisit(deviceId);
   const [digest, setDigest] = useState<SinceYouLeftDigest | null>(null);
 
   useEffect(() => {
@@ -20,6 +22,7 @@ export default function SinceYouLeftStrip() {
 
   const { counts, groups, lastVisit } = digest;
   const quiet = counts.unseenEvents === 0;
+  const checked = previousVisit ?? lastVisit;
 
   return (
     <Link
@@ -29,14 +32,15 @@ export default function SinceYouLeftStrip() {
       <div className="min-w-0">
         <p className="text-sm font-medium text-gray-200">
           {quiet
-            ? `Watchlist quiet since ${lastVisit ? timeAgo(lastVisit) : 'your last visit'}`
-            : `${counts.unseenEvents} update${counts.unseenEvents === 1 ? '' : 's'} across ${groups.length} name${groups.length === 1 ? '' : 's'} since ${lastVisit ? timeAgo(lastVisit) : 'your last visit'}`}
+            ? `Nothing new${checked ? ` since you last checked ${timeAgo(checked)}` : ''}`
+            : `${counts.unseenEvents} update${counts.unseenEvents === 1 ? '' : 's'} you haven't read, across ${groups.length} name${groups.length === 1 ? '' : 's'}`}
         </p>
         {!quiet && (
           <p className="mt-0.5 truncate text-xs text-gray-500">
             {counts.invalidated > 0 && <span className="text-red-400">{counts.invalidated} invalidated · </span>}
             {counts.needsAttention > 0 && <span className="text-amber-400">{counts.needsAttention} need attention · </span>}
             {groups[0]?.events[0]?.title}
+            {checked && <span className="text-gray-600"> · last checked {timeAgo(checked)}</span>}
           </p>
         )}
       </div>

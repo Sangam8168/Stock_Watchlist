@@ -27,9 +27,39 @@ export interface StockSnapshot extends Document {
   newsHash?: string;       // hash of the latest headline set for this symbol
   newsCount?: number;      // # of articles in the trailing window
   topHeadline?: string;
+  topHeadlineUrl?: string;
 
   // Fields whose sources disagreed beyond tolerance at capture time.
   unconfirmedFields?: string[];
+  symbolNotFound?: boolean;
+  return1W?: number;
+  return1M?: number;
+  return3M?: number;
+  return6M?: number;
+  returnYTD?: number;
+  return1Y?: number;
+  dividendPerShare?: number;
+  dividendYield?: number;
+  dividendGrowth5Y?: number;
+  payoutRatio?: number;
+  revenuePerShare?: number;
+  revenueTTM?: number;
+  eps?: number;
+  revenueGrowth?: number;
+  epsGrowth?: number;
+  beta?: number;
+  earningsTime?: string;
+  epsEstimate?: number;
+  revenueEstimate?: number;
+  lastEarningsDate?: Date;
+  lastEpsActual?: number;
+  lastEpsEstimate?: number;
+  lastEpsSurprisePct?: number;
+  analystRating?: string;
+  analystCount?: number;
+  sector?: string;
+  currency?: string;
+
 }
 
 const SnapshotSchema = new Schema<StockSnapshot>(
@@ -56,8 +86,38 @@ const SnapshotSchema = new Schema<StockSnapshot>(
     newsHash: String,
     newsCount: Number,
     topHeadline: String,
+    topHeadlineUrl: String,
 
     unconfirmedFields: { type: [String], default: undefined },
+    symbolNotFound: { type: Boolean },
+    return1W: { type: Number },
+    return1M: { type: Number },
+    return3M: { type: Number },
+    return6M: { type: Number },
+    returnYTD: { type: Number },
+    return1Y: { type: Number },
+    dividendPerShare: { type: Number },
+    dividendYield: { type: Number },
+    dividendGrowth5Y: { type: Number },
+    payoutRatio: { type: Number },
+    revenuePerShare: { type: Number },
+    revenueTTM: { type: Number },
+    eps: { type: Number },
+    revenueGrowth: { type: Number },
+    epsGrowth: { type: Number },
+    beta: { type: Number },
+    earningsTime: { type: String },
+    epsEstimate: { type: Number },
+    revenueEstimate: { type: Number },
+    lastEarningsDate: { type: Date },
+    lastEpsActual: { type: Number },
+    lastEpsEstimate: { type: Number },
+    lastEpsSurprisePct: { type: Number },
+    analystRating: { type: String },
+    analystCount: { type: Number },
+    sector: { type: String },
+    currency: { type: String },
+
   },
   { timestamps: false }
 );

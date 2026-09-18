@@ -37,7 +37,7 @@ export default function DecisionTrail({ symbol }: { symbol: string }) {
       <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
         <History className="h-3.5 w-3.5" /> Decision trail
       </p>
-      <ol className="space-y-2 border-l border-gray-800 pl-3">
+      <ol className="space-y-2 border-l hairline pl-3">
         {rows.map((r, i) => (
           <li key={i} className="text-xs">
             <div className="flex items-center gap-2">

@@ -8,8 +8,11 @@ import ThesisDialog from '@/components/watchlist/ThesisDialog';
 import ThesisMeter from '@/components/watchlist/ThesisMeter';
 import DecisionTrail from '@/components/watchlist/DecisionTrail';
 import SteelmanButton from '@/components/watchlist/SteelmanButton';
+import PeerComparison from '@/components/watchlist/PeerComparison';
+import CrossListing from '@/components/watchlist/CrossListing';
 import {
   fmtPrice,
+  currencyOf,
   severityTier,
   TIER_META,
   CHANGE_TYPE_LABEL,
@@ -74,7 +77,7 @@ export default function SymbolThesisPanel({ symbol, company }: { symbol: string;
         {levels.map((l) => (
           <div key={l.label} className="rounded bg-gray-900/60 p-2">
             <div className="text-[11px] text-gray-500">{l.label}</div>
-            <div className="text-sm text-gray-200">{fmtPrice(l.value)}</div>
+            <div className="text-sm text-gray-200">{fmtPrice(l.value, currencyOf(entry.symbol, entry.currency))}</div>
           </div>
         ))}
       </div>
@@ -83,7 +86,7 @@ export default function SymbolThesisPanel({ symbol, company }: { symbol: string;
 
       {entry.price != null && (
         <p className="text-xs text-gray-500">
-          Now {fmtPrice(entry.price)}
+          Now {fmtPrice(entry.price, currencyOf(entry.symbol, entry.currency))}
           {entry.distanceToEntryPct != null &&
             (entry.distanceToEntryPct === 0
               ? ' · in entry zone'
@@ -123,13 +126,16 @@ export default function SymbolThesisPanel({ symbol, company }: { symbol: string;
         )}
       </div>
 
-      {/* A gut-check against your own reasoning, on demand. */}
-      <div className="mt-4 border-t border-gray-800 pt-4">
+      {/* Gut-checks against your own reasoning, both on demand. */}
+      <div className="mt-4 flex flex-wrap gap-2 border-t hairline pt-4">
         <SteelmanButton symbol={entry.symbol} direction={entry.direction} />
+        <PeerComparison symbol={entry.symbol} />
+        {/* Renders itself away for US listings, which have no sibling venue. */}
+        <CrossListing symbol={entry.symbol} />
       </div>
 
       {/* What the market did is above; this is what the user decided. */}
-      <div className="mt-4 border-t border-gray-800 pt-4">
+      <div className="mt-4 border-t hairline pt-4">
         <DecisionTrail symbol={entry.symbol} />
       </div>
     </div>

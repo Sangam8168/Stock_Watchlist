@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { Check, ChevronDown, BellOff, Trash2, ArrowRight, Play } from 'lucide-react';
+import { Check, ChevronDown, BellOff, Trash2, ArrowRight, Play, Eye, CloudOff, Ban } from 'lucide-react';
 import { markSeen, removeFromWatchlist, snoozeWatchlistItem } from '@/lib/actions/watchlist.actions';
 import { notifySeenChanged } from '@/components/watchlist/WatchlistNavLink';
+import { useRecordVisit } from '@/hooks/useRecordVisit';
 import { severityTier, TIER_META, CHANGE_TYPE_LABEL, timeAgo, whenExactly, fmtDelta } from '@/lib/changes/display';
 import StoryMode from '@/components/watchlist/StoryMode';
+import EventSource from '@/components/watchlist/EventSource';
+import WhyRanked from '@/components/watchlist/WhyRanked';
 
 interface Props {
   digest: SinceYouLeftDigest;
@@ -16,13 +19,105 @@ interface Props {
   onItemChange?: () => void;
 }
 
+/** How long a group must stay on screen before it counts as read. */
+const DWELL_MS = 1500;
+/** Collect dwell hits briefly so one scroll past five names is one request. */
+const FLUSH_MS = 800;
+
 export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChange }: Props) {
   const [pending, startTransition] = useTransition();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [story, setStory] = useState(false);
   const { counts, groups, lastVisit } = digest;
+  const previousVisit = useRecordVisit(deviceId);
+  const checked = previousVisit ?? lastVisit;
 
   const after = onItemChange ?? onReviewed;
+
+  // ---------------------------------------------------------------------------
+  // Reading counts as reviewing.
+  //
+  // Previously the only thing that cleared an update was clicking "Mark all
+  // reviewed", so the banner kept saying "31 updates since your last visit"
+  // to someone who had visited a minute ago and read all 31. The count has to
+  // respond to what you actually looked at.
+  //
+  // "Looked at" is deliberately strict: the group must be at least half on
+  // screen, for a continuous DWELL_MS, in a foreground tab. Rendering below the
+  // fold or flicking past at speed does not count — the whole point of the
+  // watermark is that nothing disappears unseen.
+  //
+  // Note this marks seen on the server but does NOT refetch: the list stays put
+  // while you are reading it, and is simply gone next time.
+  // ---------------------------------------------------------------------------
+  const listRef = useRef<HTMLUListElement>(null);
+  const dwell = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const queued = useRef(new Set<string>());
+  const sent = useRef(new Set<string>());
+  const flush = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushSeen = useCallback(() => {
+    const batch = [...queued.current];
+    queued.current.clear();
+    if (!batch.length || !deviceId) return;
+    batch.forEach((sym) => sent.current.add(sym));
+    markSeen(deviceId, batch)
+      .then(notifySeenChanged)
+      // A failed mark just means it shows again next visit — the safe direction.
+      .catch(() => batch.forEach((sym) => sent.current.delete(sym)));
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (!deviceId || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const symbol = (entry.target as HTMLElement).dataset.symbol;
+          if (!symbol) continue;
+          const timer = dwell.current.get(symbol);
+          // Half the group on screen counts as reading it — but a group with
+          // many events expanded can be taller than the viewport and so can
+          // never reach a 0.5 ratio. For those, half a screenful of it being
+          // visible is the same thing, and without this they nag forever.
+          const viewport = entry.rootBounds?.height ?? 0;
+          const read =
+            entry.isIntersecting &&
+            (entry.intersectionRatio >= 0.5 || (viewport > 0 && entry.intersectionRect.height >= viewport * 0.5));
+          if (read) {
+            if (timer || sent.current.has(symbol)) continue;
+            dwell.current.set(
+              symbol,
+              setTimeout(() => {
+                dwell.current.delete(symbol);
+                // A backgrounded tab can still report intersection; that is not reading.
+                if (document.visibilityState !== 'visible') return;
+                queued.current.add(symbol);
+                if (flush.current) clearTimeout(flush.current);
+                flush.current = setTimeout(flushSeen, FLUSH_MS);
+              }, DWELL_MS)
+            );
+          } else if (timer) {
+            clearTimeout(timer);
+            dwell.current.delete(symbol);
+          }
+        }
+      },
+      { threshold: [0, 0.25, 0.5, 0.75] }
+    );
+
+    // Collected from the DOM rather than through per-item callback refs: the
+    // group list only changes when `digest` does, which is already a dependency.
+    listRef.current?.querySelectorAll<HTMLElement>('[data-symbol]').forEach((el) => observer.observe(el));
+    const timers = dwell.current;
+    return () => {
+      observer.disconnect();
+      timers.forEach(clearTimeout);
+      timers.clear();
+      if (flush.current) clearTimeout(flush.current);
+      // Don't lose a dwell that completed just as the user navigated away.
+      flushSeen();
+    };
+  }, [deviceId, flushSeen, digest]);
 
   const reviewAll = () =>
     startTransition(async () => {
@@ -55,25 +150,66 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
     });
 
   if (counts.unseenEvents === 0) {
-    // "Nothing changed" is the most common state, and on its own it reads like a
-    // broken app. Say what's being watched and what would break the silence.
+    // Silence has two causes and they are not interchangeable: nothing happened,
+    // or we could not see. An outage writes no snapshots, so it produces no
+    // events, so it would otherwise render as a reassuring green tick at exactly
+    // the moment the app has gone blind. Never claim quiet we cannot vouch for.
+    const blind = !digest.coverage.canAssertQuiet;
+    const n = digest.coverage.unseen.length;
+    const gone = digest.coverage.delisted;
+
     return (
-      <div className="rounded-xl border border-gray-700 bg-gray-800/60 p-5">
+      <div className="surface">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-200">
-            <span className="h-2 w-2 rounded-full bg-green-500" />
-            All quiet
+            {blind ? (
+              <CloudOff className="h-4 w-4 text-amber-400" />
+            ) : (
+              <span className="h-2 w-2 rounded-full bg-green-500" />
+            )}
+            {blind ? "Can't confirm" : 'All quiet'}
           </h2>
           <span className="text-xs text-gray-600">
-            {lastVisit ? `checked ${timeAgo(lastVisit)}` : 'first visit'}
+            {checked ? `checked ${timeAgo(checked)}` : 'first visit'}
           </span>
         </div>
-        <p className="mt-1.5 text-sm text-gray-500">
-          Watching <span className="font-medium text-gray-300">{counts.itemsTracked}</span>{' '}
-          {counts.itemsTracked === 1 ? 'thesis' : 'theses'}. Nothing has crossed a level you set.
-        </p>
+        {blind ? (
+          <p className="mt-1.5 text-sm text-gray-400">
+            No change to report &mdash; but we haven&rsquo;t had a fresh price for{' '}
+            <span className="font-medium text-amber-400">
+              {n} of {digest.coverage.total}
+            </span>{' '}
+            {digest.coverage.total === 1 ? 'name' : 'names'}
+            {digest.coverage.oldestUnseenAt && <> since {timeAgo(digest.coverage.oldestUnseenAt)}</>}, so this
+            silence isn&rsquo;t proof that nothing moved.
+            <span className="mt-1 block text-xs text-gray-600">
+              Waiting on: {digest.coverage.unseen.slice(0, 6).join(', ')}
+              {n > 6 && ` +${n - 6} more`} · usually a provider rate limit; the next 15-minute poll retries.
+            </span>
+          </p>
+        ) : (
+          <p className="mt-1.5 text-sm text-gray-500">
+            Watching <span className="font-medium text-gray-300">{counts.itemsTracked}</span>{' '}
+            {counts.itemsTracked === 1 ? 'thesis' : 'theses'}. Nothing has crossed a level you set.
+          </p>
+        )}
 
-        <div className="mt-3 border-t border-gray-700/70 pt-3">
+        {gone.length > 0 && (
+          <p className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-500/[0.06] p-2.5 text-xs text-gray-400">
+            <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <span>
+              <span className="font-medium text-amber-400">
+                {gone.join(', ')} no longer {gone.length === 1 ? 'trades' : 'trade'} under{' '}
+                {gone.length === 1 ? 'that ticker' : 'those tickers'}.
+              </span>{' '}
+              Indian listings get renamed and demerged often — Zomato became ETERNAL, Tata Motors split off TMPV.
+              Search for the company to find its current symbol, then remove{' '}
+              {gone.length === 1 ? 'this row' : 'these rows'}. Nothing here can update until you do.
+            </span>
+          </p>
+        )}
+
+        <div className="mt-3 border-t hairline pt-3">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
             You&rsquo;ll hear from us when
           </p>
@@ -109,16 +245,17 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
           }}
         />
       )}
-    <section className="rounded-xl border border-gray-700 bg-gray-800/60 overflow-hidden">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-700 p-5">
+    <section className="surface !p-0 overflow-hidden">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b hairline p-5">
         <div>
           <h2 className="text-lg font-semibold text-gray-100">While you were away</h2>
           <p className="text-sm text-gray-500">
-            {lastVisit
-              ? `You last checked ${whenExactly(lastVisit)} — ${timeAgo(lastVisit)}`
-              : 'Since your first visit'}{' '}
+            {checked ? `You last checked ${whenExactly(checked)} — ${timeAgo(checked)}` : 'Since your first visit'}{' '}
             · {counts.unseenEvents} update{counts.unseenEvents === 1 ? '' : 's'} across {groups.length} name
             {groups.length === 1 ? '' : 's'}
+          </p>
+          <p className="mt-1 flex items-center gap-1.5 text-xs text-gray-600">
+            <Eye className="h-3 w-3" /> These clear themselves as you read them — they stay on screen for this visit.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -139,41 +276,42 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-px bg-gray-700 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-px bg-white/5 sm:grid-cols-4">
         <Stat label="Tracked" value={counts.itemsTracked} />
         <Stat label="Need attention" value={counts.needsAttention} tone={counts.needsAttention ? 'amber' : undefined} />
         <Stat label="Invalidated" value={counts.invalidated} tone={counts.invalidated ? 'red' : undefined} />
         <Stat label="Quiet" value={counts.quiet} />
       </div>
 
-      <ul className="divide-y divide-gray-700">
+      <ul ref={listRef} className="divide-y divide-white/5">
         {groups.map((g) => {
           const tier = severityTier(g.maxSeverity);
           const meta = TIER_META[tier];
           const isOpen = expanded[g.symbol] ?? g.maxSeverity >= 70;
           return (
-            <li key={g.symbol} className="p-4">
+            <li key={g.symbol} data-symbol={g.symbol} className="p-4">
               <div className="flex items-start justify-between gap-3">
-                <button
-                  className="flex flex-1 items-start gap-3 text-left"
-                  onClick={() => setExpanded((e) => ({ ...e, [g.symbol]: !isOpen }))}
-                >
+                <div className="flex flex-1 items-start gap-3 text-left">
                   <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
                   <span className="flex-1">
                     <span className="flex items-center gap-2">
                       <Link
                         href={`/stocks/${g.symbol}`}
                         className="font-semibold text-gray-100 hover:text-yellow-500"
-                        onClick={(e) => e.stopPropagation()}
                       >
                         {g.symbol}
                       </Link>
-                      <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${meta.text} ring-1 ${meta.ring}`}>
-                        {meta.label}
-                      </span>
+                      {g.events[0] ? (
+                        <WhyRanked event={g.events[0]} />
+                      ) : (
+                        <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${meta.text} ring-1 ${meta.ring}`}>
+                          {meta.label}
+                        </span>
+                      )}
                       <span className="text-xs text-gray-500">{g.events.length} update{g.events.length === 1 ? '' : 's'}</span>
                     </span>
                     <span className="mt-0.5 block text-sm text-gray-400">{g.events[0]?.detail}</span>
+                    {g.events[0] && <EventSource data={g.events[0].data} />}
 
                     {/* Literal was → now across the away-window */}
                     {g.deltas.length > 0 && (
@@ -206,7 +344,7 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
                     )}
 
                     {isOpen && g.events.length > 1 && (
-                      <ul className="mt-2 space-y-1.5 border-l border-gray-700 pl-3">
+                      <ul className="mt-2 space-y-1.5 border-l hairline pl-3">
                         {g.events.slice(1).map((ev, i) => (
                           <li key={i} className="text-sm text-gray-400">
                             <span className="text-xs text-gray-500">{CHANGE_TYPE_LABEL[ev.type] ?? ev.type} · {timeAgo(ev.createdAt)}</span>
@@ -217,12 +355,21 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
                       </ul>
                     )}
                   </span>
-                  <ChevronDown className={`mt-1 h-4 w-4 shrink-0 text-gray-500 transition ${isOpen ? 'rotate-180' : ''}`} />
-                </button>
+                  {g.events.length > 1 && (
+                    <button
+                      onClick={() => setExpanded((e) => ({ ...e, [g.symbol]: !isOpen }))}
+                      aria-expanded={isOpen}
+                      aria-label={isOpen ? `Hide the other ${g.events.length - 1} updates for ${g.symbol}` : `Show the other ${g.events.length - 1} updates for ${g.symbol}`}
+                      className="mt-0.5 shrink-0 rounded p-1 text-gray-500 transition-colors hover:bg-white/5 hover:text-gray-300"
+                    >
+                      <ChevronDown className={`h-4 w-4 transition ${isOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  )}
+                </div>
                 <button
                   onClick={() => reviewSymbol(g.symbol)}
                   disabled={pending}
-                  className="shrink-0 rounded border border-gray-700 px-2 py-1 text-xs text-gray-400 hover:border-gray-500 hover:text-gray-200 disabled:opacity-50"
+                  className="shrink-0 rounded border border-white/10 px-2 py-1 text-xs text-gray-400 hover:border-gray-500 hover:text-gray-200 disabled:opacity-50"
                 >
                   Reviewed
                 </button>
@@ -235,21 +382,21 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
                   <button
                     onClick={() => reviewSymbol(g.symbol)}
                     disabled={pending}
-                    className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:border-yellow-500 hover:text-yellow-500 disabled:opacity-50"
+                    className="rounded border border-white/10 px-2 py-1 text-gray-300 hover:border-yellow-500 hover:text-yellow-500 disabled:opacity-50"
                   >
                     Keep on list
                   </button>
                   <button
                     onClick={() => snooze(g.symbol)}
                     disabled={pending}
-                    className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-gray-300 hover:border-gray-500 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-gray-300 hover:border-gray-500 disabled:opacity-50"
                   >
                     <BellOff className="h-3 w-3" /> Mute 1wk
                   </button>
                   <button
                     onClick={() => cull(g.symbol)}
                     disabled={pending}
-                    className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-gray-300 hover:border-red-500 hover:text-red-400 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-gray-300 hover:border-red-500 hover:text-red-400 disabled:opacity-50"
                   >
                     <Trash2 className="h-3 w-3" /> Cull
                   </button>
@@ -267,7 +414,7 @@ export default function SinceYouLeft({ digest, deviceId, onReviewed, onItemChang
 function Stat({ label, value, tone }: { label: string; value: number; tone?: 'amber' | 'red' }) {
   const color = tone === 'red' ? 'text-red-400' : tone === 'amber' ? 'text-amber-400' : 'text-gray-100';
   return (
-    <div className="bg-gray-800 p-4">
+    <div className="bg-[#16181c] p-4">
       <div className={`text-2xl font-semibold ${color}`}>{value}</div>
       <div className="text-xs text-gray-500">{label}</div>
     </div>

@@ -18,13 +18,16 @@ const NavItems = ({initialStocks}: { initialStocks: StockWithWatchlistStatus[]})
     return (
         <ul className="flex flex-col sm:flex-row p-2 gap-3 sm:gap-10 font-medium">
             {NAV_ITEMS.map(({ href, label }) => {
+                // A link to the real page, plus a trigger-less mount so Cmd-K
+                // still opens the palette from anywhere.
                 if(href === '/search') return (
-                    <li key="search-trigger">
-                        <SearchCommand
-                            renderAs="text"
-                            label="Search"
-                            initialStocks={initialStocks}
-                        />
+                    <li key="search-link" className="flex items-center gap-2">
+                        <Link href="/search" className={`hover:text-yellow-500 transition-colors ${
+                            isActive('/search') ? 'text-gray-100' : ''
+                        }`}>
+                            Search
+                        </Link>
+                        <SearchCommand renderAs="hidden" initialStocks={initialStocks} />
                     </li>
                 )
 

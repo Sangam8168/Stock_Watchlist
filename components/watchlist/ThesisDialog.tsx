@@ -17,6 +17,7 @@ import { getQuote } from '@/lib/actions/market-data.actions';
 import { extractThesisLocally } from '@/lib/changes/parse-thesis';
 import { SENSITIVITY_STEPS } from '@/lib/changes/preferences';
 import { CATEGORY_META } from '@/lib/changes/display';
+import { fmtPrice, currencyOf } from '@/lib/changes/display';
 
 type Mode = 'add' | 'edit';
 
@@ -80,6 +81,11 @@ export default function ThesisDialog({
   };
   const [pending, startTransition] = useTransition();
 
+  // You type entry, invalidation and target here, so the wrong symbol in front
+  // of the live quote is worse than a display bug — it would have you setting
+  // rupee levels against a price you read as dollars.
+  const ccy = currencyOf(symbol);
+
   // Live quote so the levels can be reasoned about against the real price
   // instead of typed blind.
   const [quote, setQuote] = useState<number | null>(initial?.price ?? null);
@@ -87,6 +93,7 @@ export default function ThesisDialog({
 
   const [sens, setSens] = useState<number>(initial?.sensitivity ?? 1);
   const [tone, setTone] = useState<'signal' | 'all'>(initial?.alertTone ?? 'all');
+  const [shares, setShares] = useState(initial?.shares != null ? String(initial.shares) : '');
   const [paste, setPaste] = useState('');
   const [pasteOpen, setPasteOpen] = useState(false);
   const [cat, setCat] = useState<WatchlistCategoryName>((initial?.category as WatchlistCategoryName) ?? 'developing');
@@ -153,6 +160,7 @@ export default function ThesisDialog({
       targetPrice: numOrNull(formData.get('targetPrice')),
       catalystDate: strOrNull(formData.get('catalystDate')),
       catalystNote: strOrNull(formData.get('catalystNote')),
+      shares: shares.trim() === '' ? null : Number(shares),
       sensitivity: sens,
       alertTone: tone,
       notify: formData.get('notify') === 'on',
@@ -210,7 +218,7 @@ export default function ThesisDialog({
             <div className="flex items-baseline gap-2">
               <span className="text-xs text-gray-500">Trading now</span>
               <span className="text-lg font-semibold tabular-nums text-gray-100">
-                {quote != null ? `$${quote.toFixed(2)}` : quoteState === 'loading' ? '…' : '—'}
+                {quote != null ? fmtPrice(quote, ccy) : quoteState === 'loading' ? '…' : '—'}
               </span>
               {plan.away != null && (
                 <span className="text-xs tabular-nums text-gray-500">
@@ -385,6 +393,19 @@ export default function ThesisDialog({
               />
             </div>
             <div>
+              <label className={labelCls}>Shares owned <span className="text-gray-600">(optional)</span></label>
+              <input
+                type="number"
+                step="any"
+                min="0"
+                value={shares}
+                onChange={(e) => setShares(e.target.value)}
+                placeholder="only if you own it"
+                title="Enables market value, profit/loss and % of portfolio in the Holdings view"
+                className={field}
+              />
+            </div>
+            <div>
               <label className={labelCls}>Catalyst note</label>
               <input name="catalystNote" defaultValue={initial?.catalystNote ?? ''} placeholder="earnings, FDA…" className={field} />
             </div>
@@ -395,6 +416,7 @@ export default function ThesisDialog({
           {quote != null && plan.entry != null && (
             <div className="rounded-lg border border-gray-700 bg-gray-900/40 p-3">
               <LiveMeter
+                ccy={ccy}
                 price={quote}
                 low={num(lo)}
                 high={num(hi)}
@@ -493,7 +515,7 @@ export default function ThesisDialog({
  * invalidation → entry band → target left-to-right; short mirrors it.
  */
 function LiveMeter({
-  price, low, high, invalidation, target, short,
+  price, low, high, invalidation, target, short, ccy,
 }: {
   price: number;
   low: number | null;
@@ -501,6 +523,8 @@ function LiveMeter({
   invalidation: number | null;
   target: number | null;
   short: boolean;
+  /** Passed in rather than re-derived, so the meter and the field above it can never disagree. */
+  ccy: string;
 }) {
   const marks = [price, low, high, invalidation, target].filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
@@ -534,13 +558,13 @@ function LiveMeter({
         <div
           className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded bg-gray-100 transition-all duration-300"
           style={{ left: `${at(price)}%` }}
-          title={`Now $${price.toFixed(2)}`}
+          title={`Now ${fmtPrice(price, ccy)}`}
         />
       </div>
       <div className="mt-1.5 flex justify-between text-[10px] tabular-nums">
-        <span className="text-red-400">{invalidation != null ? `$${invalidation}` : ''}</span>
-        <span className="text-gray-400">now ${price.toFixed(2)}</span>
-        <span className="text-green-500">{target != null ? `$${target}` : ''}</span>
+        <span className="text-red-400">{invalidation != null ? fmtPrice(Number(invalidation), ccy) : ''}</span>
+        <span className="text-gray-400">now {fmtPrice(price, ccy)}</span>
+        <span className="text-green-500">{target != null ? fmtPrice(Number(target), ccy) : ''}</span>
       </div>
     </div>
   );

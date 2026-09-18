@@ -25,6 +25,7 @@ const TABS_UP_TO = 6;
 export default function ListSwitcher({
   lists,
   active,
+  unread = {},
   onSelect,
   onCreate,
   onRename,
@@ -32,6 +33,8 @@ export default function ListSwitcher({
 }: {
   lists: ListSummary[];
   active: string;
+  /** Unread update count per list name. Absent or 0 renders nothing. */
+  unread?: Record<string, number>;
   onSelect: (name: string) => void;
   onCreate: () => void;
   onRename: () => void;
@@ -59,6 +62,21 @@ export default function ListSwitcher({
     return lists.filter((l) => l.name.toLowerCase().includes(t));
   }, [lists, q]);
 
+  // The count of stocks is grey and structural; unread updates are the thing
+  // you came back for, so they get the accent and sit outside the tally.
+  const Unread = ({ name }: { name: string }) => {
+    const n = unread[name] ?? 0;
+    if (!n) return null;
+    return (
+      <span
+        title={`${n} unread update${n === 1 ? '' : 's'} in "${name}"`}
+        className="rounded-full bg-yellow-500/15 px-1.5 text-[10px] font-semibold text-yellow-500"
+      >
+        {n > 99 ? '99+' : n}
+      </span>
+    );
+  };
+
   const manage = active !== 'Main' && (
     <span className="flex items-center gap-0.5">
       <button
@@ -81,7 +99,7 @@ export default function ListSwitcher({
   // --- Few lists: everything visible ---------------------------------------
   if (lists.length <= TABS_UP_TO) {
     return (
-      <div className="flex flex-wrap items-center gap-1 border-b border-gray-700 print:hidden">
+      <div className="flex flex-wrap items-center gap-1 border-b hairline print:hidden">
         {lists.map((l) => (
           <button
             key={l.name}
@@ -96,6 +114,7 @@ export default function ListSwitcher({
             <span className={`rounded-full px-1.5 text-[10px] ${active === l.name ? 'bg-gray-700 text-gray-300' : 'text-gray-600'}`}>
               {l.count}
             </span>
+            <Unread name={l.name} />
           </button>
         ))}
         {manage}
@@ -112,9 +131,12 @@ export default function ListSwitcher({
 
   // --- Many lists: one button, searchable picker ----------------------------
   const activeCount = lists.find((l) => l.name === active)?.count ?? 0;
+  // With the picker closed the other lists are off screen entirely, so the
+  // button has to carry news from lists you cannot currently see.
+  const unreadElsewhere = lists.reduce((n, l) => (l.name === active ? n : n + (unread[l.name] ?? 0)), 0);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-gray-700 pb-2 print:hidden" ref={boxRef}>
+    <div className="flex flex-wrap items-center gap-2 border-b hairline pb-2 print:hidden" ref={boxRef}>
       <div className="relative">
         <button
           onClick={() => { setOpen((v) => !v); setQ(''); }}
@@ -122,6 +144,15 @@ export default function ListSwitcher({
         >
           <span className="max-w-[14rem] truncate font-medium">{active}</span>
           <span className="rounded-full bg-gray-700 px-1.5 text-[10px] text-gray-300">{activeCount}</span>
+          <Unread name={active} />
+          {unreadElsewhere > 0 && (
+            <span
+              title={`${unreadElsewhere} unread update${unreadElsewhere === 1 ? '' : 's'} in your other lists`}
+              className="rounded-full px-1.5 text-[10px] text-gray-500 ring-1 ring-yellow-500/30"
+            >
+              +{unreadElsewhere > 99 ? '99+' : unreadElsewhere} elsewhere
+            </span>
+          )}
           <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
 
@@ -155,7 +186,10 @@ export default function ListSwitcher({
                       {active === l.name ? <Check className="h-3.5 w-3.5 shrink-0" /> : <span className="w-3.5" />}
                       <span className="truncate">{l.name}</span>
                     </span>
-                    <span className="shrink-0 text-[10px] text-gray-600">{l.count}</span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-[10px] text-gray-600">
+                      {l.count}
+                      <Unread name={l.name} />
+                    </span>
                   </button>
                 ))
               )}

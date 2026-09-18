@@ -8,7 +8,9 @@ import { Snapshot } from '@/database/models/snapshot.model';
 import { WatchedSymbolModel } from '@/database/models/watchedSymbol.model';
 import { ChangeEventModel } from '@/database/models/changeEvent.model';
 import { SymbolEventModel } from '@/database/models/symbolEvent.model';
-import { SeenStateModel, GLOBAL_SEEN_KEY } from '@/database/models/seenState.model';
+import { SeenStateModel, GLOBAL_SEEN_KEY, GLOBAL_VISIT_KEY } from '@/database/models/seenState.model';
+import { assessCoverage } from '@/lib/changes/coverage';
+import { isMarketOpenFor } from '@/lib/changes/exchange';
 import { ThesisRevisionModel } from '@/database/models/thesisRevision.model';
 import { auth } from '@/lib/better-auth/auth';
 import { refreshSymbols, bumpWatchedSymbol } from '@/lib/watchlist/pipeline';
@@ -41,6 +43,7 @@ async function requireUser(): Promise<{ id: string; email: string }> {
 
 const EMPTY_DIGEST: SinceYouLeftDigest = {
   lastVisit: null,
+  coverage: { total: 0, fresh: 0, degraded: 0, blind: 0, unseen: [], delisted: [], oldestUnseenAt: null, canAssertQuiet: true },
   counts: { itemsTracked: 0, needsAttention: 0, invalidated: 0, quiet: 0, unseenEvents: 0 },
   groups: [],
 };
@@ -234,7 +237,7 @@ async function seenWatermarks(userId: string, deviceId: string): Promise<Record<
   const globalMs = global ? new Date(global.lastSeenAt).getTime() : 0;
   const map: Record<string, number> = { [GLOBAL_SEEN_KEY]: globalMs };
   for (const r of rows) {
-    if (r.symbol === GLOBAL_SEEN_KEY) continue;
+    if (r.symbol === GLOBAL_SEEN_KEY || r.symbol === GLOBAL_VISIT_KEY) continue;
     map[r.symbol] = Math.max(globalMs, new Date(r.lastSeenAt).getTime());
   }
   return map;
@@ -282,7 +285,7 @@ function buildEntry(
     symbol: string; company: string; list?: string; category: WatchlistCategoryName;
     thesis?: string; direction?: 'long' | 'short'; entryLow?: number; entryHigh?: number;
     invalidationPrice?: number; targetPrice?: number; catalystDate?: Date; catalystNote?: string;
-    notify: boolean; sensitivity?: number; alertTone?: 'signal' | 'all';
+    notify: boolean; shares?: number; sensitivity?: number; alertTone?: 'signal' | 'all';
     mutedUntil?: Date; owned?: boolean; ownedAt?: Date; ownedPrice?: number;
     lastReviewedAt?: Date; addedAt: Date; updatedAt?: Date;
   },
@@ -341,6 +344,43 @@ function buildEntry(
       dataAsOf: snap ? new Date(snap.asOf).toISOString() : null,
       stale: snap?.stale ?? true,
       unconfirmedFields: snap?.unconfirmedFields ?? [],
+
+    // Provider metrics, passed straight through for the column views.
+    return1W: snap?.return1W ?? null,
+    return1M: snap?.return1M ?? null,
+    return3M: snap?.return3M ?? null,
+    return6M: snap?.return6M ?? null,
+    returnYTD: snap?.returnYTD ?? null,
+    return1Y: snap?.return1Y ?? null,
+    dividendPerShare: snap?.dividendPerShare ?? null,
+    dividendYield: snap?.dividendYield ?? null,
+    dividendGrowth5Y: snap?.dividendGrowth5Y ?? null,
+    payoutRatio: snap?.payoutRatio ?? null,
+    revenueTTM: snap?.revenueTTM ?? null,
+    eps: snap?.eps ?? null,
+    revenueGrowth: snap?.revenueGrowth ?? null,
+    epsGrowth: snap?.epsGrowth ?? null,
+    beta: snap?.beta ?? null,
+    earningsTime: snap?.earningsTime ?? null,
+    epsEstimate: snap?.epsEstimate ?? null,
+    revenueEstimate: snap?.revenueEstimate ?? null,
+    lastEarningsDate: snap?.lastEarningsDate ? new Date(snap.lastEarningsDate).toISOString() : null,
+    lastEpsActual: snap?.lastEpsActual ?? null,
+    lastEpsEstimate: snap?.lastEpsEstimate ?? null,
+    lastEpsSurprisePct: snap?.lastEpsSurprisePct ?? null,
+    analystRating: snap?.analystRating ?? null,
+    analystCount: snap?.analystCount ?? null,
+    sector: snap?.sector ?? null,
+    currency: snap?.currency ?? null,
+    symbolNotFound: !!snap?.symbolNotFound,
+
+    // Holdings are computed from your own numbers, not the provider's.
+    shares: item.shares ?? null,
+    marketValue: item.shares != null && snap?.price != null ? item.shares * snap.price : null,
+    profitLoss:
+      item.shares != null && item.ownedPrice != null && snap?.price != null
+        ? item.shares * (snap.price - item.ownedPrice)
+        : null,
       distanceToEntryPct: entryDistancePct(snap?.price ?? null, item.entryLow, item.entryHigh),
       unseenCount: unseen.length,
       topUnseenSeverity: unseen.reduce((m, e) => Math.max(m, e.severity), 0),
@@ -416,10 +456,63 @@ export async function getSinceYouLeft(deviceId: string): Promise<SinceYouLeftDig
 
   const items = await Watchlist.find({ userId: user.id }).lean();
   const symbols = items.map((i) => i.symbol);
-  const watermarks = await seenWatermarks(user.id, deviceId);
+  const [watermarks, visitRow] = await Promise.all([
+    seenWatermarks(user.id, deviceId),
+    SeenStateModel.findOne({ userId: user.id, deviceId, symbol: GLOBAL_VISIT_KEY }).lean(),
+  ]);
   const globalMs = watermarks[GLOBAL_SEEN_KEY] ?? 0;
+  // What "you last checked …" should say. Falls back to the reviewed watermark
+  // for accounts that predate the visit row, so the copy is never blank.
+  const lastVisitMs = visitRow ? new Date(visitRow.lastSeenAt).getTime() : globalMs;
 
   const eventsBySymbol = await loadChangeEvents(user.id, symbols, { perSymbolCap: 20 });
+
+  // Before reporting silence, establish that we could actually see. The cached
+  // snapshot on WatchedSymbol is exactly what the poll last managed to write,
+  // so this is one indexed read and no provider calls.
+  const watched = await WatchedSymbolModel.find(
+    { symbol: { $in: symbols } },
+    { symbol: 1, latest: 1 }
+  ).lean();
+  const latestBySymbol = new Map(
+    watched.map((w) => {
+      const l = (w.latest ?? {}) as { capturedAt?: string | Date; stale?: boolean; symbolNotFound?: boolean };
+      return [
+        w.symbol,
+        {
+          capturedAt: l.capturedAt ? new Date(l.capturedAt) : null,
+          stale: !!l.stale,
+          notFound: !!l.symbolNotFound,
+        },
+      ];
+    })
+  );
+  // Tolerance depends on whether that symbol's own venue is trading: minutes
+  // while it is open, days while it is shut. With two markets in one watchlist
+  // a single global flag would either nag about a sleeping market or go quiet
+  // during a live one, so coverage is assessed per venue and merged.
+  const coverageRows = symbols.map((sym) => ({
+    symbol: sym,
+    capturedAt: latestBySymbol.get(sym)?.capturedAt ?? null,
+    stale: latestBySymbol.get(sym)?.stale ?? false,
+    notFound: latestBySymbol.get(sym)?.notFound ?? false,
+  }));
+  const now = new Date();
+  const openRows = coverageRows.filter((r) => isMarketOpenFor(r.symbol, now));
+  const shutRows = coverageRows.filter((r) => !isMarketOpenFor(r.symbol, now));
+  const openPart = assessCoverage(openRows, { now, marketOpen: true });
+  const shutPart = assessCoverage(shutRows, { now, marketOpen: false });
+  const oldest = [openPart.oldestUnseenAt, shutPart.oldestUnseenAt].filter(Boolean) as Date[];
+  const coverage = {
+    total: openPart.total + shutPart.total,
+    fresh: openPart.fresh + shutPart.fresh,
+    degraded: openPart.degraded + shutPart.degraded,
+    blind: openPart.blind + shutPart.blind,
+    unseen: [...openPart.unseen, ...shutPart.unseen].sort(),
+    delisted: [...openPart.delisted, ...shutPart.delisted].sort(),
+    oldestUnseenAt: oldest.length ? new Date(Math.min(...oldest.map((d) => d.getTime()))) : null,
+    canAssertQuiet: openPart.canAssertQuiet && shutPart.canAssertQuiet,
+  };
 
   // Snoozed items don't shout at you until the mute expires.
   const mutedSymbols = new Set(items.filter((i) => isMuted(i.mutedUntil)).map((i) => i.symbol));
@@ -458,7 +551,8 @@ export async function getSinceYouLeft(deviceId: string): Promise<SinceYouLeftDig
   ]);
 
   return {
-    lastVisit: globalMs ? new Date(globalMs).toISOString() : null,
+    lastVisit: lastVisitMs ? new Date(lastVisitMs).toISOString() : null,
+    coverage: { ...coverage, oldestUnseenAt: coverage.oldestUnseenAt?.toISOString() ?? null },
     counts: {
       itemsTracked: items.length,
       needsAttention: attentionSymbols.size,
@@ -472,6 +566,9 @@ export async function getSinceYouLeft(deviceId: string): Promise<SinceYouLeftDig
         return {
           symbol,
           company: item?.company ?? symbol,
+          // One digest query still covers every list; the page slices it per
+          // list rather than re-querying each time you switch tabs.
+          list: item?.list ?? 'Main',
           maxSeverity: evs.reduce((m, e) => Math.max(m, e.severity), 0),
           events: evs.map(serializeEvent),
           deltas: buildDeltas(beforeSnaps[symbol] ?? null, afterSnaps[symbol] ?? null, {
@@ -560,6 +657,7 @@ export async function addToWatchlist(input: AddWatchlistInput): Promise<{ ok: bo
       catalystDate: input.catalystDate ? new Date(input.catalystDate) : null,
       catalystNote: input.catalystNote === null ? null : input.catalystNote?.trim() || null,
       notify: input.notify ?? true,
+      shares: input.shares === null ? null : input.shares,
       sensitivity: input.sensitivity !== undefined ? clampSensitivity(input.sensitivity) : undefined,
       alertTone: input.alertTone === 'signal' || input.alertTone === 'all' ? input.alertTone : undefined,
       updatedAt: new Date(),
@@ -629,6 +727,7 @@ export async function updateWatchlistItem(
     fields.catalystNote = patch.catalystNote === null ? null : patch.catalystNote.trim() || null;
   }
   if (patch.notify !== undefined) fields.notify = patch.notify;
+  if (patch.shares !== undefined) fields.shares = patch.shares;
   if (patch.sensitivity !== undefined) fields.sensitivity = clampSensitivity(patch.sensitivity);
   if (patch.alertTone === 'signal' || patch.alertTone === 'all') fields.alertTone = patch.alertTone;
 
@@ -919,6 +1018,26 @@ export async function snoozeWatchlistItem(symbol: string, days: number | null): 
   if (res.matchedCount === 0) return { ok: false, until: null };
   revalidatePath('/watchlist');
   return { ok: true, until: until ? until.toISOString() : null };
+}
+
+/**
+ * Stamp "you were here" and hand back the *previous* stamp in the same round
+ * trip, so the page can say how long you were away without a read-then-write
+ * race against its own update.
+ *
+ * Deliberately separate from markSeen: arriving is not the same as having read
+ * anything, and this timestamp must never be allowed to hide an unseen event.
+ */
+export async function recordVisit(deviceId: string): Promise<{ previous: string | null }> {
+  const user = await getUser();
+  if (!user || !deviceId) return { previous: null };
+  await connectToDatabase();
+  const prev = await SeenStateModel.findOneAndUpdate(
+    { userId: user.id, deviceId, symbol: GLOBAL_VISIT_KEY },
+    { $set: { lastSeenAt: new Date() }, $setOnInsert: { userId: user.id, deviceId, symbol: GLOBAL_VISIT_KEY } },
+    { upsert: true, returnDocument: 'before' }
+  ).lean();
+  return { previous: prev ? new Date(prev.lastSeenAt).toISOString() : null };
 }
 
 /**

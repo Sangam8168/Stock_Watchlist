@@ -19,7 +19,7 @@ export default function WatchlistNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex flex-wrap items-center gap-1 border-b border-gray-800 print:hidden">
+    <nav className="flex flex-wrap items-center gap-1 border-b hairline print:hidden">
       {TABS.map((t) => {
         const active = pathname === t.href;
         const Icon = t.icon;

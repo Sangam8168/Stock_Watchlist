@@ -28,7 +28,7 @@ export default function ThesisHealth({ entries }: { entries: WatchlistEntry[] })
   const band = healthBand(report.score);
 
   return (
-    <section className="flex flex-wrap items-center gap-4 rounded-xl border border-gray-700 bg-gray-800/50 p-4">
+    <section className="flex flex-wrap items-center gap-4 surface flex-row">
       <div
         className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-full ring-2 ${band.ring}`}
         title={`Thesis health across ${report.tracked} tracked ${report.tracked === 1 ? 'item' : 'items'}`}

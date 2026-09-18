@@ -5,8 +5,17 @@ import { Schema, model, models, type Document, type Model } from 'mongoose';
 // devices: your phone and your laptop each remember where they left off, and
 // opening one doesn't silently clear the "new" badges on the other.
 //
-// `symbol` is the ticker, or the sentinel '__global' for the last dashboard visit.
+// `symbol` is the ticker, or one of two sentinels.
+//
+// These are deliberately two different things, and conflating them was a bug:
+//   __global — how far you have *reviewed*. Only an explicit "reviewed" or an
+//              event actually appearing on your screen moves it. Nothing you
+//              have not looked at is ever allowed to disappear.
+//   __visit  — when you were last *here*. Stamped on arrival, reviewed or not.
+//              Only ever used for the "you last checked …" wording, never to
+//              decide what counts as new.
 export const GLOBAL_SEEN_KEY = '__global';
+export const GLOBAL_VISIT_KEY = '__visit';
 
 export interface SeenState extends Document {
   userId: string;

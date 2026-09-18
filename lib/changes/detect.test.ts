@@ -6,6 +6,7 @@ import {
   volatilityFromChanges,
   type SnapshotLike,
   type ThesisLike,
+  sourceOf,
 } from './detect.ts';
 
 const baseThesis: ThesisLike = {
@@ -174,4 +175,60 @@ test('narration attaches a fresh headline to a level break, but not a stale one'
   const broke2 = stale.find((c) => c.type === 'invalidation_breached');
   assert.ok(broke2);
   assert.doesNotMatch(broke2!.detail, /Likely related/);
+});
+
+test('sourceOf: cites fresh coverage, and only a link it would open', () => {
+  const prev = { symbol: 'X', newsHash: 'old' } as never;
+  const withLink = sourceOf(prev, {
+    symbol: 'X', newsHash: 'new', topHeadline: '  Chip   demand  surges ',
+    topHeadlineUrl: 'https://example.com/a',
+  } as never);
+  assert.equal(withLink?.title, 'Chip demand surges');
+  assert.equal(withLink?.url, 'https://example.com/a');
+
+  // A headline with no usable link is still worth quoting, just not clickable.
+  const noLink = sourceOf(prev, {
+    symbol: 'X', newsHash: 'new', topHeadline: 'Something happened',
+    topHeadlineUrl: 'javascript:alert(1)',
+  } as never);
+  assert.equal(noLink?.title, 'Something happened');
+  assert.equal(noLink?.url, undefined);
+});
+
+test('sourceOf: unchanged news is not evidence of a move', () => {
+  const same = { symbol: 'X', newsHash: 'same', topHeadline: 'Old news' } as never;
+  assert.equal(sourceOf({ symbol: 'X', newsHash: 'same' } as never, same), null);
+});
+
+test('approaching 52w high: fires on entering the band, not while loitering in it', () => {
+  const item = { symbol: 'X', company: 'X Corp', direction: 'long' as const };
+  const opts = { marketOpen: true, tradingDaysUntil: () => null };
+  const snap = (price: number) => ({ symbol: 'X', asOf: new Date('2026-09-17T15:00:00Z'), price, week52High: 100, week52Low: 50 });
+
+  // The band is the top 2%: 98 and up against a high of 100.
+  const entering = detectChanges(snap(95) as never, snap(98.5) as never, item, opts);
+  assert.equal(entering.some((c) => c.type === 'approaching_52w_high'), true);
+
+  // Still in the band, but it was already in it last cycle — say nothing.
+  const loitering = detectChanges(snap(98.5) as never, snap(99) as never, item, opts);
+  assert.equal(loitering.some((c) => c.type === 'approaching_52w_high'), false);
+
+  // Through the high is a break, not an approach.
+  const breaking = detectChanges(snap(98.5) as never, snap(101) as never, item, opts);
+  assert.equal(breaking.some((c) => c.type === 'approaching_52w_high'), false);
+  assert.equal(breaking.some((c) => c.type === 'new_52w_high'), true);
+});
+
+test('approaching 52w low is quieter than the break it precedes', () => {
+  const item = { symbol: 'X', company: 'X Corp', direction: 'long' as const };
+  const opts = { marketOpen: true, tradingDaysUntil: () => null };
+  const snap = (price: number) => ({ symbol: 'X', asOf: new Date('2026-09-17T15:00:00Z'), price, week52High: 100, week52Low: 50 });
+
+  const near = detectChanges(snap(55) as never, snap(50.8) as never, item, opts)
+    .find((c) => c.type === 'approaching_52w_low');
+  const broke = detectChanges(snap(55) as never, snap(49) as never, item, opts)
+    .find((c) => c.type === 'new_52w_low');
+  assert.ok(near, 'approach should fire');
+  assert.ok(broke, 'break should fire');
+  assert.ok(near.severity < broke.severity, 'a heads-up must not shout as loud as the fact');
 });

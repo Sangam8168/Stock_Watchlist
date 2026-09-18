@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, Search } from 'lucide-react';
 import { searchStocks } from '@/lib/actions/finnhub.actions';
+import { getTrending, getMySymbols, type TrendingItem } from '@/lib/actions/discover.actions';
+import { fmtPct } from '@/lib/changes/display';
+import { TrendingUp, Check } from 'lucide-react';
 import { useDebounce } from '@/hooks/useDebounce';
 import ThesisDialog from '@/components/watchlist/ThesisDialog';
 
@@ -14,7 +17,17 @@ export default function AddSymbol({ onAdded, list }: { onAdded: () => void; list
   // The dialog is rendered at the root of this component — NOT inside the result
   // rows — so closing the dropdown can never unmount it mid-interaction.
   const [selected, setSelected] = useState<{ symbol: string; name: string } | null>(null);
+  const [trending, setTrending] = useState<TrendingItem[]>([]);
+  const [mine, setMine] = useState<Set<string>>(new Set());
   const boxRef = useRef<HTMLDivElement>(null);
+
+  // Loaded once on focus rather than on mount: no cost until the box is opened.
+  const loadDiscover = async () => {
+    if (trending.length) return;
+    const [t, m] = await Promise.all([getTrending(6), getMySymbols()]);
+    setTrending(t);
+    setMine(new Set(m));
+  };
 
   const run = async () => {
     if (!term.trim()) {
@@ -58,12 +71,42 @@ export default function AddSymbol({ onAdded, list }: { onAdded: () => void; list
         <input
           value={term}
           onChange={(e) => setTerm(e.target.value)}
-          onFocus={() => setOpenList(true)}
+          onFocus={() => { setOpenList(true); void loadDiscover(); }}
           placeholder="Add a stock — search by symbol or name"
           className="h-10 flex-1 bg-transparent text-sm text-gray-100 outline-none placeholder:text-gray-500"
         />
         {loading && <span className="text-xs text-gray-500">…</span>}
       </div>
+
+      {openList && !term.trim() && trending.length > 0 && (
+        <div className="surface absolute z-20 mt-1 w-full !p-0 shadow-xl">
+          <p className="flex items-center gap-1.5 border-b hairline px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            <TrendingUp className="h-3.5 w-3.5" /> Most watched here
+          </p>
+          {trending.map((t) => (
+            <button
+              key={t.symbol}
+              type="button"
+              onClick={() => pick(t.symbol, t.company)}
+              className="flex w-full items-center justify-between gap-3 border-b hairline px-3 py-2 text-left last:border-0 hover:bg-white/5"
+            >
+              <span className="min-w-0">
+                <span className="text-sm font-medium text-gray-100">{t.symbol}</span>
+                <span className="ml-2 truncate text-xs text-gray-500">{t.company}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-3">
+                {t.changePercent != null && (
+                  <span className={`text-xs tabular-nums ${t.changePercent >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {fmtPct(t.changePercent)}
+                  </span>
+                )}
+                <span className="text-[10px] text-gray-600">{t.watchers} watching</span>
+                {t.isInWatchlist && <Check className="h-3.5 w-3.5 text-green-500" />}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {openList && term.trim() && (
         <div className="absolute z-20 mt-1 max-h-80 w-full overflow-y-auto rounded-md border border-gray-600 bg-gray-800 shadow-xl">
@@ -77,11 +120,17 @@ export default function AddSymbol({ onAdded, list }: { onAdded: () => void; list
                 onClick={() => pick(s.symbol, s.name)}
                 className="flex w-full items-center justify-between gap-2 border-b border-gray-700 px-3 py-2 text-left last:border-0 hover:bg-gray-700/60"
               >
-                <span>
+                <span className="min-w-0">
                   <span className="text-sm font-medium text-gray-100">{s.symbol}</span>
-                  <span className="ml-2 text-xs text-gray-500">{s.name}</span>
+                  <span className="ml-2 truncate text-xs text-gray-500">{s.name}</span>
                 </span>
-                <Plus className="h-4 w-4 text-yellow-500" />
+                {mine.has(s.symbol) ? (
+                  <span className="flex shrink-0 items-center gap-1 text-[10px] text-green-500">
+                    <Check className="h-3.5 w-3.5" /> watching
+                  </span>
+                ) : (
+                  <Plus className="h-4 w-4 shrink-0 text-yellow-500" />
+                )}
               </button>
             ))
           )}

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import TradingViewWidget from '@/components/TradingViewWidget';
 import { CANDLE_CHART_WIDGET_CONFIG } from '@/lib/constants';
-import { fmtPrice, fmtPct, severityTier, TIER_META } from '@/lib/changes/display';
+import { fmtPrice, fmtPct, severityTier, TIER_META, currencyOf } from '@/lib/changes/display';
 
 /**
  * Chart-first layout: one big candlestick chart with the watchlist as a compact
@@ -60,7 +60,7 @@ export default function ChartView({ entries, onBack }: { entries: WatchlistEntry
                     <span className="block truncate text-xs text-gray-600">{e.company}</span>
                   </span>
                   <span className="shrink-0 text-right">
-                    <span className="block text-sm tabular-nums text-gray-100">{fmtPrice(e.price)}</span>
+                    <span className="block text-sm tabular-nums text-gray-100">{fmtPrice(e.price, currencyOf(e.symbol, e.currency))}</span>
                     <span
                       className={`block text-xs tabular-nums ${
                         e.changePercent == null ? 'text-gray-500' : e.changePercent >= 0 ? 'text-green-500' : 'text-red-500'
@@ -83,10 +83,10 @@ export default function ChartView({ entries, onBack }: { entries: WatchlistEntry
             </p>
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
               {current.entryLow != null && current.entryHigh != null && (
-                <span>entry {fmtPrice(current.entryLow)}–{fmtPrice(current.entryHigh)}</span>
+                <span>entry {fmtPrice(current.entryLow, currencyOf(current.symbol, current.currency))}–{fmtPrice(current.entryHigh, currencyOf(current.symbol, current.currency))}</span>
               )}
-              {current.invalidationPrice != null && <span>invalidation {fmtPrice(current.invalidationPrice)}</span>}
-              {current.targetPrice != null && <span>target {fmtPrice(current.targetPrice)}</span>}
+              {current.invalidationPrice != null && <span>invalidation {fmtPrice(current.invalidationPrice, currencyOf(current.symbol, current.currency))}</span>}
+              {current.targetPrice != null && <span>target {fmtPrice(current.targetPrice, currencyOf(current.symbol, current.currency))}</span>}
             </div>
             <Link href={`/stocks/${current.symbol}`} className="mt-2 inline-block text-xs text-yellow-500 hover:underline">
               Open {current.symbol} detail →

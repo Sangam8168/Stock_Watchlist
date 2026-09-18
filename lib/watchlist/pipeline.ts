@@ -11,8 +11,9 @@ import { SymbolEventModel } from '@/database/models/symbolEvent.model';
 import { WatchedSymbolModel } from '@/database/models/watchedSymbol.model';
 import { buildSnapshot } from '@/lib/actions/market-data.actions';
 import { detectChanges, volatilityFromChanges, type DetectedChange, type ChangeKind } from '@/lib/changes/detect';
-import { isMarketOpen, tradingDaysUntil } from '@/lib/market';
+import { tradingDaysUntil } from '@/lib/market';
 import { log } from '@/lib/observability/logger';
+import { isMarketOpenFor } from '@/lib/changes/exchange';
 
 const MIN_SECONDS_BETWEEN_WRITES = 55; // collapse rapid manual refreshes
 const MIN_SECONDS_BETWEEN_FETCHES = 45; // don't spend Finnhub quota on refresh spam
@@ -151,7 +152,10 @@ export async function refreshSymbol(symbol: string): Promise<RefreshResult> {
     const volatility = volatilityFromChanges(await trailingDailyChanges(sym));
     const detectOpts = {
       volatility,
-      marketOpen: isMarketOpen(),
+      // Per venue, not per server: an NSE listing's session closes hours
+      // before the US one opens, so a single global flag would gate every
+      // Indian move alert out of existence.
+      marketOpen: isMarketOpenFor(sym),
       tradingDaysUntil: (d: Date | string | null | undefined) => tradingDaysUntil(d ?? null),
     };
     let events = 0;

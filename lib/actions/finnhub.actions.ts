@@ -176,11 +176,21 @@ export const searchStocks = cache(async (query?: string): Promise<StockWithWatch
       })
       .filter((s) => s.symbol);
 
+    // Indian listings (.NS on the NSE, .BO on the BSE) quote at 0 on this plan,
+    // so they used to be filtered out entirely — a row that could never update
+    // is worse than no row. They now route to a second provider that does quote
+    // them, so they are offered again. Every *other* foreign suffix is still
+    // hidden, because nothing quotes those yet and the rule has not changed:
+    // only offer what the app can actually keep up to date.
+    const supported = mapped.filter(
+      (s2) => !/\.[A-Z]{2,3}$/.test(s2.symbol) || /\.(NS|BO)$/.test(s2.symbol)
+    );
+
     // Finnhub returns one row per listing, so the same ticker can come back
     // several times (different exchanges / share classes). We key the picker by
     // symbol and adding either row does the same thing, so keep the first only.
     const seen = new Set<string>();
-    const deduped = mapped.filter((s) => {
+    const deduped = supported.filter((s) => {
       if (seen.has(s.symbol)) return false;
       seen.add(s.symbol);
       return true;

@@ -54,6 +54,8 @@ export interface WatchlistItem extends Document {
   owned: boolean;
   ownedAt?: Date;
   ownedPrice?: number;
+  /** Share count, for portfolio value and P&L. Optional — you can track a thesis without owning it. */
+  shares?: number;
   /** Last time you deliberately reviewed this thesis (Monthly-review discipline). */
   lastReviewedAt?: Date;
   addedAt: Date;
@@ -82,6 +84,7 @@ const WatchlistSchema = new Schema<WatchlistItem>(
     owned: { type: Boolean, default: false },
     ownedAt: { type: Date },
     ownedPrice: { type: Number, min: 0 },
+    shares: { type: Number, min: 0 },
     lastReviewedAt: { type: Date },
     addedAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },

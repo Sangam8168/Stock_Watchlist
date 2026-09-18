@@ -45,6 +45,29 @@ const createAuth = (db: Db) => {
                 }
             },
         },
+        databaseHooks: {
+            user: {
+                create: {
+                    // This app has email verification switched off
+                    // (requireEmailVerification: false), so no verification mail is
+                    // ever sent and emailVerified would stay false forever.
+                    //
+                    // That matters because better-auth refuses to auto-link a Google
+                    // sign-in to a pre-existing *unverified* account — the fix for
+                    // the account-takeover advisory where an attacker pre-registers
+                    // your address and waits for you to sign in with Google. With
+                    // verification disabled, every account trips that guard and
+                    // Google sign-in silently fails for anyone who signed up by
+                    // email first.
+                    //
+                    // Marking accounts verified at creation is only defensible
+                    // *because* sign-up requires no proof of address here. If you
+                    // ever turn verification on, delete this hook — otherwise it
+                    // reintroduces exactly the hole the guard closes.
+                    before: async (user) => ({ data: { ...user, emailVerified: true } }),
+                },
+            },
+        },
         plugins: [nextCookies()],
     });
 

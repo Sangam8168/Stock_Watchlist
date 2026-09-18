@@ -1,3 +1,5 @@
+import { CURRENCY_SYMBOL } from './currency.ts';
+import { exchangeOf } from './exchange.ts';
 // Client-safe presentation helpers for change events. No server imports.
 
 export type Tier = 'critical' | 'act' | 'review' | 'fyi';
@@ -25,6 +27,8 @@ export const CHANGE_TYPE_LABEL: Record<string, string> = {
   earnings_reported: 'Earnings reported',
   news_break: 'News break',
   new_52w_high: '52-week high',
+  approaching_52w_high: 'near 52-week high',
+  approaching_52w_low: 'near 52-week low',
   new_52w_low: '52-week low',
   valuation_shift: 'Valuation shift',
   corporate_action: 'Possible split',
@@ -98,9 +102,30 @@ export function timeAgo(iso: string | number | Date): string {
   return `${days}d ago`;
 }
 
-export function fmtPrice(n: number | null | undefined): string {
+/**
+ * Indian figures group as 1,24,390 rather than 124,390. Getting this wrong is a
+ * small thing that reads as carelessness to anyone from that market.
+ */
+const LOCALE_FOR: Record<string, string> = { INR: 'en-IN' };
+
+/**
+ * Price with the right symbol in front of it.
+ *
+ * Currency is a property of the venue, so it can always be recovered from the
+ * ticker when a snapshot does not carry one — which matters for rows written
+ * before the second provider existed. Rendering ₹1,243.90 as $1,243.90 would be
+ * the most visible possible contradiction of everything else this app claims
+ * about not misrepresenting data.
+ */
+export function fmtPrice(n: number | null | undefined, currency: string = 'USD'): string {
   if (typeof n !== 'number' || !Number.isFinite(n)) return '—';
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const sym = CURRENCY_SYMBOL[currency] ?? '';
+  return `${sym}${n.toLocaleString(LOCALE_FOR[currency] ?? 'en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** The currency to render a symbol in: what was stored, else what its venue uses. */
+export function currencyOf(symbol: string | undefined, explicit?: string | null): string {
+  return explicit || exchangeOf(symbol ?? '').currency;
 }
 
 export function fmtPct(n: number | null | undefined): string {

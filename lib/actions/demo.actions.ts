@@ -8,6 +8,7 @@ import { Snapshot } from '@/database/models/snapshot.model';
 import { ChangeEventModel } from '@/database/models/changeEvent.model';
 import { SymbolEventModel } from '@/database/models/symbolEvent.model';
 import { WatchedSymbolModel } from '@/database/models/watchedSymbol.model';
+import { SeenStateModel } from '@/database/models/seenState.model';
 import { auth } from '@/lib/better-auth/auth';
 import { detectChanges, volatilityFromChanges } from '@/lib/changes/detect';
 import { tradingDaysUntil } from '@/lib/market';
@@ -226,4 +227,82 @@ export async function simulateSinceYouLeft(): Promise<{ ok: boolean; events: num
 
   revalidatePath('/watchlist');
   return { ok: true, events };
+}
+
+/**
+ * Simulate the data provider going down, and undo it.
+ *
+ * This exists because the most important property of this app is the hardest
+ * one to show: an outage writes no snapshots, so it detects no changes, so an
+ * empty digest renders as a reassuring "all quiet" — the app reassuring you at
+ * the exact moment it has gone blind. Describing that is unconvincing; letting
+ * someone watch it refuse to say "all quiet" is not.
+ *
+ * It flips the same `stale` flag a genuine provider failure sets, so the app
+ * takes the real outage code path rather than a special demo branch. Nothing is
+ * deleted, and `restoreFeed` clears it. The regular 15-minute poll also heals it
+ * on its own, which is why the UI says to run this immediately before showing it.
+ *
+ * Scoped to the caller's own watchlist: a demo account must not be able to make
+ * another user's watchlist look broken.
+ */
+export async function simulateFeedOutage(count = 3): Promise<{ ok: boolean; symbols: string[] }> {
+  const userId = await requireDemoUser();
+  await connectToDatabase();
+
+  const mine = await Watchlist.find({ userId }, { symbol: 1 }).lean();
+  const symbols = [...new Set(mine.map((m) => m.symbol))].sort().slice(0, Math.max(1, count));
+  if (!symbols.length) return { ok: false, symbols: [] };
+
+  await WatchedSymbolModel.updateMany(
+    { symbol: { $in: symbols } },
+    {
+      $set: {
+        'latest.stale': true,
+        // Backdate the capture too, so it reads as blind whether or not the
+        // market is open — the closed-market tolerance is days, not minutes.
+        'latest.capturedAt': new Date(Date.now() - 5 * 3600_000),
+      },
+    }
+  );
+
+  revalidatePath('/watchlist');
+  revalidatePath('/');
+  return { ok: true, symbols };
+}
+
+/** Undo simulateFeedOutage for the caller's symbols. */
+export async function restoreFeed(): Promise<{ ok: boolean; symbols: number }> {
+  const userId = await requireDemoUser();
+  await connectToDatabase();
+
+  const mine = await Watchlist.find({ userId }, { symbol: 1 }).lean();
+  const symbols = [...new Set(mine.map((m) => m.symbol))];
+  if (!symbols.length) return { ok: true, symbols: 0 };
+
+  await WatchedSymbolModel.updateMany(
+    { symbol: { $in: symbols } },
+    { $set: { 'latest.stale': false, 'latest.capturedAt': new Date() } }
+  );
+
+  revalidatePath('/watchlist');
+  revalidatePath('/');
+  return { ok: true, symbols: symbols.length };
+}
+
+/**
+ * Wind the "caught up" marker back, so "While you were away" can be shown again
+ * without waiting for real events. Rewinds only this device's watermark.
+ */
+export async function rewindLastSeen(hours = 24): Promise<{ ok: boolean }> {
+  const userId = await requireDemoUser();
+  await connectToDatabase();
+  const when = new Date(Date.now() - hours * 3600_000);
+  // $max is what guarantees the watermark never moves backwards in normal use,
+  // so rewinding has to be an explicit $set — it is deliberately not something
+  // the ordinary code path can do.
+  await SeenStateModel.updateMany({ userId }, { $set: { lastSeenAt: when } });
+  revalidatePath('/watchlist');
+  revalidatePath('/');
+  return { ok: true };
 }

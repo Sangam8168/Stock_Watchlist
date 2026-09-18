@@ -1,3 +1,5 @@
+import { CURRENCY_SYMBOL } from './currency.ts';
+import { exchangeOf } from './exchange.ts';
 /**
  * The change-detection engine.
  *
@@ -23,6 +25,8 @@ export type ChangeKind =
   | 'news_break'
   | 'new_52w_high'
   | 'new_52w_low'
+  | 'approaching_52w_high'
+  | 'approaching_52w_low'
   | 'valuation_shift'
   | 'corporate_action'
   | 'stale_data';
@@ -123,11 +127,35 @@ export function abnormalMoveThreshold(vol?: VolatilityStats | null): number {
  * causal link that isn't there.
  */
 function because(prev: SnapshotLike | null, next: SnapshotLike): string {
-  const fresh = !!next.topHeadline && !!next.newsHash && next.newsHash !== prev?.newsHash;
-  if (!fresh) return '';
-  const h = (next.topHeadline as string).replace(/\s+/g, ' ').trim();
-  const short = h.length > 90 ? `${h.slice(0, 88).trimEnd()}…` : h;
+  const src = sourceOf(prev, next);
+  if (!src) return '';
+  const short = src.title.length > 90 ? `${src.title.slice(0, 88).trimEnd()}…` : src.title;
   return ` Likely related: "${short}".`;
+}
+
+/**
+ * The evidence behind `because()`, in structured form.
+ *
+ * The engine already declined to assert a link unless the coverage is genuinely
+ * new; this lets it *show its working* rather than asking to be believed. Rides
+ * in the event's existing `data` blob, so no event-model migration.
+ *
+ * The URL is optional on purpose: a headline with no link is still worth
+ * quoting, it just cannot be clicked.
+ */
+export function sourceOf(
+  prev: SnapshotLike | null,
+  next: SnapshotLike
+): { title: string; url?: string } | null {
+  const fresh = !!next.topHeadline && !!next.newsHash && next.newsHash !== prev?.newsHash;
+  if (!fresh) return null;
+  const title = (next.topHeadline as string).replace(/\s+/g, ' ').trim();
+  if (!title) return null;
+  const raw = (next as { topHeadlineUrl?: string }).topHeadlineUrl?.trim();
+  // Only ever hand the UI a link we would be willing to open: an http(s) URL
+  // from the provider, never a javascript: or data: payload.
+  const url = raw && /^https?:\/\//i.test(raw) ? raw : undefined;
+  return { title, url };
 }
 
 export function detectChanges(
@@ -137,6 +165,14 @@ export function detectChanges(
   opts: DetectOptions = {}
 ): DetectedChange[] {
   const out: DetectedChange[] = [];
+  // Event text is written into the database at detection time, so a wrong
+  // currency here is permanent — it cannot be re-rendered later the way a UI
+  // number can. Derive it once from the venue and use it everywhere below.
+  const cur = CURRENCY_SYMBOL[(next as { currency?: string }).currency ?? exchangeOf(item.symbol ?? '').currency] ?? '';
+
+  // Computed once: every event below that quotes the news also cites it.
+  const evidence = sourceOf(prev, next);
+  const cite = evidence ? { sourceTitle: evidence.title, sourceUrl: evidence.url } : {};
   const now = opts.now ?? new Date();
   const symbol = item.symbol;
   const name = item.company || symbol;
@@ -160,7 +196,7 @@ export function detectChanges(
         type: 'corporate_action',
         severity: 45,
         title: `${symbol}: price changed sharply — check for a split`,
-        detail: `${name} went from $${fmt(prevPrice)} to $${fmt(price)} between checks. That usually means a stock split or share-class change, not a real move. Re-check your entry / invalidation / target levels.`,
+        detail: `${name} went from ${cur}${fmt(prevPrice)} to ${cur}${fmt(price)} between checks. That usually means a stock split or share-class change, not a real move. Re-check your entry / invalidation / target levels.`,
         data: { from: prevPrice, to: price, ratio: Number(ratio.toFixed(3)) },
         dedupeKey: `corporate_action:${symbol}:${dayKey(next.asOf)}`,
       });
@@ -184,8 +220,8 @@ export function detectChanges(
           type: 'entered_entry_zone',
           severity: 80,
           title: `${symbol} entered your entry zone`,
-          detail: `${name} is trading at $${fmt(price)}, inside the $${fmt(entryLow)}–$${fmt(entryHigh)} band you were waiting for.${because(prev, next)}`,
-          data: { price, entryLow, entryHigh },
+          detail: `${name} is trading at ${cur}${fmt(price)}, inside the ${cur}${fmt(entryLow)}–${cur}${fmt(entryHigh)} band you were waiting for.${because(prev, next)}`,
+          data: { price, entryLow, entryHigh, ...cite },
           dedupeKey: `entered_entry_zone:${symbol}:${dayKey(next.asOf)}`,
         });
       }
@@ -200,8 +236,8 @@ export function detectChanges(
           type: 'invalidation_breached',
           severity: 95,
           title: `${symbol} broke your invalidation level`,
-          detail: `${name} ${isShort ? 'rose to' : 'fell to'} $${fmt(price)}, ${isShort ? 'above' : 'below'} the $${fmt(invalidationPrice)} level you set as "thesis is wrong".${because(prev, next)} Time to decide whether it stays on the list.`,
-          data: { price, invalidationPrice, direction: isShort ? 'short' : 'long' },
+          detail: `${name} ${isShort ? 'rose to' : 'fell to'} ${cur}${fmt(price)}, ${isShort ? 'above' : 'below'} the ${cur}${fmt(invalidationPrice)} level you set as "thesis is wrong".${because(prev, next)} Time to decide whether it stays on the list.`,
+          data: { price, invalidationPrice, direction: isShort ? 'short' : 'long', ...cite },
           dedupeKey: `invalidation_breached:${symbol}:${dayKey(next.asOf)}`,
         });
       }
@@ -216,8 +252,8 @@ export function detectChanges(
           type: 'target_reached',
           severity: 85,
           title: `${symbol} reached your target`,
-          detail: `${name} hit $${fmt(price)}, ${isShort ? 'at or below' : 'at or above'} your $${fmt(targetPrice)} target.${because(prev, next)}`,
-          data: { price, targetPrice, direction: isShort ? 'short' : 'long' },
+          detail: `${name} hit ${cur}${fmt(price)}, ${isShort ? 'at or below' : 'at or above'} your ${cur}${fmt(targetPrice)} target.${because(prev, next)}`,
+          data: { price, targetPrice, direction: isShort ? 'short' : 'long', ...cite },
           dedupeKey: `target_reached:${symbol}:${dayKey(next.asOf)}`,
         });
       }
@@ -243,8 +279,8 @@ export function detectChanges(
         type: 'abnormal_move',
         severity: clampSeverity(45 + Math.min(35, (move - threshold) * 3)),
         title: `${symbol} moved ${dir} ${fmt(move)}% today`,
-        detail: `${name} is ${dir} ${fmt(move)}% at $${fmt(next.price)} — large for this stock.${vsVol}${because(prev, next) || " Often means news you haven't seen yet."}`,
-        data: { changePercent: next.changePercent, threshold, price: next.price },
+        detail: `${name} is ${dir} ${fmt(move)}% at ${cur}${fmt(next.price)} — large for this stock.${vsVol}${because(prev, next) || " Often means news you haven't seen yet."}`,
+        data: { changePercent: next.changePercent, threshold, price: next.price, ...cite },
         dedupeKey: `abnormal_move:${symbol}:${dayKey(next.asOf)}`,
       });
     }
@@ -319,7 +355,7 @@ export function detectChanges(
         type: 'new_52w_high',
         severity: 50,
         title: `${symbol} at a 52-week high`,
-        detail: `${name} printed a new 52-week high around $${fmt(price)}.`,
+        detail: `${name} printed a new 52-week high around ${cur}${fmt(price)}.`,
         data: { price, week52High: next.week52High },
         dedupeKey: `new_52w_high:${symbol}:${dayKey(next.asOf)}`,
       });
@@ -329,10 +365,47 @@ export function detectChanges(
         type: 'new_52w_low',
         severity: 52,
         title: `${symbol} at a 52-week low`,
-        detail: `${name} printed a new 52-week low around $${fmt(price)}. Value or value trap?`,
+        detail: `${name} printed a new 52-week low around ${cur}${fmt(price)}. Value or value trap?`,
         data: { price, week52Low: next.week52Low },
         dedupeKey: `new_52w_low:${symbol}:${dayKey(next.asOf)}`,
       });
+    }
+
+    // Approaching the range, having not been near it before. Quieter than a
+    // break on purpose — the break is a fact, this is only a heads-up. It earns
+    // its place because it arrives while you can still act: once the high is
+    // printed, the decision about whether to chase it has already been made for
+    // you. Fires on the crossing into the band, so it says this once, not every
+    // cycle the price spends loitering there.
+    const NEAR = 0.02;
+    const nearHigh = (v: number) => price >= v * (1 - NEAR) && price < v * 0.999;
+    const nearLow = (v: number) => price <= v * (1 + NEAR) && price > v * 1.001;
+
+    if (typeof next.week52High === 'number' && nearHigh(next.week52High)) {
+      const wasNear = prevPrice >= next.week52High * (1 - NEAR);
+      if (!wasNear) {
+        out.push({
+          type: 'approaching_52w_high',
+          severity: 35,
+          title: `${symbol} is closing on its 52-week high`,
+          detail: `${name} is within ${fmt(((next.week52High - price) / next.week52High) * 100, 1)}% of its 52-week high of ${cur}${fmt(next.week52High)}.${because(prev, next)}`,
+          data: { price, week52High: next.week52High, ...cite },
+          dedupeKey: `approaching_52w_high:${symbol}:${dayKey(next.asOf)}`,
+        });
+      }
+    }
+    if (typeof next.week52Low === 'number' && nearLow(next.week52Low)) {
+      const wasNear = prevPrice <= next.week52Low * (1 + NEAR);
+      if (!wasNear) {
+        out.push({
+          type: 'approaching_52w_low',
+          severity: 38,
+          title: `${symbol} is closing on its 52-week low`,
+          detail: `${name} is within ${fmt(((price - next.week52Low) / next.week52Low) * 100, 1)}% of its 52-week low of ${cur}${fmt(next.week52Low)}.${because(prev, next)}`,
+          data: { price, week52Low: next.week52Low, ...cite },
+          dedupeKey: `approaching_52w_low:${symbol}:${dayKey(next.asOf)}`,
+        });
+      }
     }
   }
 

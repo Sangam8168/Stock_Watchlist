@@ -13,7 +13,7 @@ export default function Disclaimer({ compact = false }: { compact?: boolean }) {
   }
 
   return (
-    <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 text-[11px] leading-relaxed text-gray-600">
+    <div className="surface-quiet text-[11px] leading-relaxed text-gray-600">
       <p className="font-semibold text-gray-500">Informational purposes only</p>
       <p className="mt-1">
         Stock Watchlist is a research and note-keeping tool. Nothing here is financial,

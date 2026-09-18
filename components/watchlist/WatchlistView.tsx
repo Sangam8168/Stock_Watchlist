@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { RefreshCw, Mail, LayoutGrid, Table2, LineChart, X, Trash2, BellOff, Briefcase, Check, Pencil } from 'lucide-react';
+import { RefreshCw, Mail, LayoutGrid, Table2, LineChart, X, Trash2, BellOff, Bell, Briefcase, Check, Pencil } from 'lucide-react';
 import { useDeviceId } from '@/hooks/useDeviceId';
 import { useUiPrefs } from '@/hooks/useUiPrefs';
 import {
@@ -21,12 +21,18 @@ import {
   moveToPortfolio,
   returnToWatchlist,
 } from '@/lib/actions/watchlist.actions';
-import { seedDemoWatchlist, simulateSinceYouLeft, canUseDemoTools } from '@/lib/actions/demo.actions';
+import { canUseDemoTools } from '@/lib/actions/demo.actions';
+import TestBench from '@/components/watchlist/TestBench';
 import { CATEGORY_META, fmtPct, fmtMarketCap } from '@/lib/changes/display';
 import SinceYouLeft from '@/components/watchlist/SinceYouLeft';
 import ThesisHealth from '@/components/watchlist/ThesisHealth';
+import Concentration from '@/components/watchlist/Concentration';
 import WatchlistRow from '@/components/watchlist/WatchlistRow';
-import WatchlistTable, { TABLE_VIEWS, type TableView } from '@/components/watchlist/WatchlistTable';
+import WatchlistTable, { TABLE_VIEWS, type TableView, type Col } from '@/components/watchlist/WatchlistTable';
+import ColumnPicker from '@/components/watchlist/ColumnPicker';
+import TableControls, { type Timeframe } from '@/components/watchlist/TableControls';
+import { getFxRates } from '@/lib/actions/fx.actions';
+import { type CurrencyCode } from '@/lib/changes/currency';
 import WatchlistOptions from '@/components/watchlist/WatchlistOptions';
 import ChartView from '@/components/watchlist/ChartView';
 import AddSymbol from '@/components/watchlist/AddSymbol';
@@ -69,6 +75,11 @@ export default function WatchlistView() {
   const [sort, setSort] = useState<SortKey>('category');
   const [layout, setLayout] = useState<Layout>('cards');
   const [tableView, setTableView] = useState<TableView>('general');
+  const [customCols, setCustomCols] = useState<Col[] | null>(null);
+  const [timeframe, setTimeframe] = useState<Timeframe>('1D');
+  const [currency, setCurrency] = useState<CurrencyCode>('USD');
+  const [groupBySector, setGroupBySector] = useState(false);
+  const [fx, setFx] = useState<{ rates: Record<string, number>; asOf: string | null }>({ rates: { USD: 1 }, asOf: null });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [baselineDone, setBaselineDone] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
@@ -97,6 +108,11 @@ export default function WatchlistView() {
   // DEMO_TOOLS_EMAILS. The server action enforces this too — this only hides the UI.
   useEffect(() => {
     canUseDemoTools().then(setDemoTools).catch(() => setDemoTools(false));
+  }, []);
+
+  // Rates are revalidated hourly server-side; one fetch per mount is plenty.
+  useEffect(() => {
+    getFxRates().then((r) => setFx({ rates: r.rates, asOf: r.asOf })).catch(() => {});
   }, []);
 
   // Realtime updates — poll the materialised rows (no provider calls) every 45s.
@@ -148,18 +164,6 @@ export default function WatchlistView() {
     } finally {
       setEmailing(false);
     }
-  };
-
-  const loadDemo = async () => {
-    const res = await seedDemoWatchlist();
-    toast.success(`Loaded ${res.added} demo theses`);
-    await load();
-  };
-
-  const simulate = async () => {
-    const res = await simulateSinceYouLeft();
-    toast[res.ok ? 'success' : 'error'](res.ok ? `Simulated ${res.events} change events` : 'Add some stocks first');
-    await load();
   };
 
   // --- selection -----------------------------------------------------------
@@ -243,6 +247,45 @@ export default function WatchlistView() {
   );
   const positions = useMemo(() => (entries ?? []).filter((e) => e.owned), [entries]);
 
+  // One digest query covers every list; slicing it here is what makes each list
+  // show only its own updates without a round trip per tab switch. The counts
+  // have to be recomputed, not reused — they were totals across all lists.
+  const unreadByList = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const g of digest?.groups ?? []) m[g.list] = (m[g.list] ?? 0) + g.events.length;
+    return m;
+  }, [digest]);
+
+  const listDigest = useMemo<SinceYouLeftDigest | null>(() => {
+    if (!digest) return null;
+    const groups = digest.groups.filter((g) => g.list === activeList);
+    // Coverage is scoped too: a blind symbol sitting in another list must not
+    // cast doubt on this one's silence.
+    const mine = new Set(candidates.map((c) => c.symbol));
+    const unseen = digest.coverage.unseen.filter((sym) => mine.has(sym));
+    const delisted = digest.coverage.delisted.filter((sym) => mine.has(sym));
+    return {
+      lastVisit: digest.lastVisit,
+      coverage: {
+        ...digest.coverage,
+        total: mine.size,
+        unseen,
+        delisted,
+        canAssertQuiet: unseen.length === 0,
+      },
+      counts: {
+        itemsTracked: candidates.length,
+        needsAttention: groups.filter((g) =>
+          g.events.some((e) => e.severity >= 50 && e.type !== 'invalidation_breached')
+        ).length,
+        invalidated: groups.filter((g) => g.events.some((e) => e.type === 'invalidation_breached')).length,
+        quiet: Math.max(0, candidates.length - groups.length),
+        unseenEvents: groups.reduce((n, g) => n + g.events.length, 0),
+      },
+      groups,
+    };
+  }, [digest, activeList, candidates]);
+
   // Bulk actions apply to `selected`, which is independent of what's rendered.
   // Narrowing the view would otherwise leave hidden rows armed for deletion.
   useEffect(() => {
@@ -289,13 +332,20 @@ export default function WatchlistView() {
   const avgPe = pes.length
     ? pes.length % 2 ? pes[(pes.length - 1) / 2] : (pes[pes.length / 2 - 1] + pes[pes.length / 2]) / 2
     : null;
-  const totalCap = candidates.reduce((s, e) => s + (e.marketCap ?? 0), 0);
+  // Market caps are money, so they are only addable within one currency. Today
+  // Indian snapshots carry no cap at all, which would silently drop them from
+  // the total — so say nothing rather than show a figure that quietly excludes
+  // part of the list.
+  const capCurrencies = new Set(
+    candidates.filter((e) => (e.marketCap ?? 0) > 0).map((e) => e.currency ?? 'USD')
+  );
+  const totalCap = capCurrencies.size > 1 ? 0 : candidates.reduce((s, e) => s + (e.marketCap ?? 0), 0);
   const nextCatalyst = candidates.map((e) => e.catalystTradingDays).filter((d): d is number => d != null).sort((a, b) => a - b)[0];
 
   const widthClass = prefs.fullWidth ? 'max-w-none' : layout === 'cards' ? 'max-w-3xl' : 'max-w-6xl';
 
   return (
-    <div className={`mx-auto space-y-6 py-8 ${widthClass}`}>
+    <div className={`page-stack mx-auto py-10 ${widthClass}`}>
       <WatchlistNav />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -303,6 +353,16 @@ export default function WatchlistView() {
           <h1 className="text-2xl font-bold text-gray-100">Watchlist</h1>
           <p className="text-sm text-gray-500">
             {candidates.length} {candidates.length === 1 ? 'thesis' : 'theses'} in your research pipeline
+            {/* The panels now sit below the table, so the count that made you
+                come back has to be reachable from the top of the page. */}
+            {(listDigest?.counts.unseenEvents ?? 0) > 0 && (
+              <>
+                {' · '}
+                <a href="#updates" className="text-yellow-500 underline-offset-2 hover:underline">
+                  {listDigest?.counts.unseenEvents} unread in &ldquo;{activeList}&rdquo;
+                </a>
+              </>
+            )}
             {positions.length > 0 && (
               <>
                 {' · '}
@@ -349,7 +409,7 @@ export default function WatchlistView() {
 
       {emailResult && (
         <div
-          className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm print:hidden ${
+          className={`flex items-start gap-2 surface-sunken flex-row text-sm print:hidden ${
             emailResult.ok
               ? 'border-green-500/30 bg-green-500/5 text-green-400'
               : 'border-amber-500/30 bg-amber-500/5 text-amber-300'
@@ -363,27 +423,12 @@ export default function WatchlistView() {
         </div>
       )}
 
-      {candidates.length > 0 && <ThesisHealth entries={candidates} />}
-
-      <div className="print:hidden">
-        <SinceYouLeft digest={digest} deviceId={deviceId} onReviewed={load} onItemChange={load} />
-      </div>
-
-      {demoTools && (
-        <div className="flex flex-wrap gap-3 text-xs text-gray-600 print:hidden">
-          <button onClick={loadDemo} className="rounded border border-gray-700 px-2 py-1 hover:border-gray-500 hover:text-gray-300">
-            Load demo watchlist
-          </button>
-          <button onClick={simulate} className="rounded border border-gray-700 px-2 py-1 hover:border-gray-500 hover:text-gray-300">
-            Simulate &ldquo;while you were away&rdquo;
-          </button>
-          <span className="self-center">— demo helpers; the real feed is driven by the 15-min poll</span>
-        </div>
-      )}
+      {demoTools && <TestBench onChanged={load} />}
 
       <ListSwitcher
         lists={lists}
         active={activeList}
+        unread={unreadByList}
         onSelect={setActiveList}
         onRename={renameActiveList}
         onDelete={deleteActiveList}
@@ -404,7 +449,7 @@ export default function WatchlistView() {
 
       {candidates.length === 0 && (entries ?? []).length > 0 ? (
         // Other lists have items — this one is just empty. Don't re-run onboarding.
-        <div className="rounded-xl border border-dashed border-gray-700 p-10 text-center">
+        <div className="surface p-10 text-center">
           <p className="text-gray-300">
             &ldquo;{activeList}&rdquo; is empty
           </p>
@@ -431,7 +476,7 @@ export default function WatchlistView() {
             <GuidedFirstThesis onDone={load} onSkip={() => setGuided(false)} />
           </div>
         ) : (
-        <div className="rounded-xl border border-dashed border-gray-700 p-8">
+        <div className="surface p-8">
           <div className="mx-auto max-w-2xl">
             <h2 className="text-center text-lg font-semibold text-gray-100">
               This isn&rsquo;t a price list. It&rsquo;s a list of decisions.
@@ -444,10 +489,10 @@ export default function WatchlistView() {
             <ol className="mt-6 grid gap-3 sm:grid-cols-3">
               {[
                 { n: '1', t: 'Add a stock', d: 'Search any ticker in the box above.' },
-                { n: '2', t: 'Say what you\u2019re waiting for', d: 'The price you\u2019d buy at, and the price that would mean you were wrong.' },
+                { n: '2', t: 'Say what you\u2019re waiting for', d: 'The price you\u2019d buy at, and the price that would change your mind.' },
                 { n: '3', t: 'Come back', d: 'You\u2019ll see only what changed against your plan \u2014 not another wall of numbers.' },
               ].map((s) => (
-                <li key={s.n} className="rounded-lg border border-gray-700 bg-gray-800/40 p-4">
+                <li key={s.n} className="surface-sunken">
                   <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-yellow-500 text-xs font-bold text-gray-950">
                     {s.n}
                   </span>
@@ -458,13 +503,13 @@ export default function WatchlistView() {
             </ol>
 
             {/* A concrete example does more than a definition. */}
-            <div className="mt-5 rounded-lg border border-gray-700 bg-gray-900/50 p-4">
+            <div className="mt-5 surface-sunken">
               <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">For example</p>
               <p className="mt-2 text-sm leading-relaxed text-gray-400">
                 You like <span className="font-semibold text-gray-200">NVIDIA</span>, but not at
                 <span className="tabular-nums text-gray-200"> $230</span>. You&rsquo;d buy around
                 <span className="tabular-nums text-yellow-500"> $158&ndash;$168</span>, and if it falls to
-                <span className="tabular-nums text-red-400"> $148</span> you&rsquo;d admit you were wrong.
+                <span className="tabular-nums text-red-400"> $148</span> your reason no longer holds.
               </p>
               <p className="mt-2 text-sm leading-relaxed text-gray-400">
                 Now a 2% dip that lands at <span className="tabular-nums text-gray-200">$163</span> is a
@@ -493,7 +538,7 @@ export default function WatchlistView() {
                     className={`rounded-full px-3 py-1 text-xs transition-colors ${
                       filter === f.key
                         ? 'bg-yellow-500 text-gray-950'
-                        : 'border border-gray-700 text-gray-400 hover:border-gray-500'
+                        : 'border border-white/10 text-gray-400 hover:border-white/25'
                     }`}
                   >
                     {f.label}
@@ -504,16 +549,19 @@ export default function WatchlistView() {
 
             <div className="ml-auto flex items-center gap-2">
               {layout === 'table' && (
-                <select
-                  value={tableView}
-                  onChange={(e) => setTableView(e.target.value as TableView)}
-                  className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300"
-                  title="Which columns to show"
-                >
-                  {TABLE_VIEWS.map((v) => (
-                    <option key={v.key} value={v.key}>{v.label} columns</option>
-                  ))}
-                </select>
+                <>
+                  <select
+                    value={tableView}
+                    onChange={(e) => { setTableView(e.target.value as TableView); setCustomCols(null); }}
+                    className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-300"
+                    title="Preset column sets"
+                  >
+                    {TABLE_VIEWS.map((v) => (
+                      <option key={v.key} value={v.key}>{v.label}</option>
+                    ))}
+                  </select>
+                  <ColumnPicker view={tableView} value={customCols} onChange={setCustomCols} />
+                </>
               )}
               {layout === 'cards' && candidates.length >= 4 && (
                 <select
@@ -535,21 +583,34 @@ export default function WatchlistView() {
               <span className="text-sm text-gray-200">{selected.size} selected</span>
               <button
                 onClick={() => runBulk(() => bulkSnooze([...selected], 7), `Muted ${selected.size} for 1 week`)}
+                title="Silence alerts for a week — the thesis keeps being tracked"
                 className="inline-flex items-center gap-1 rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:border-gray-400"
               >
                 <BellOff className="h-3 w-3" /> Mute 1wk
               </button>
+              {/* Muting from this view used to be one-way: the table has no
+                  per-row controls, so there was no way to undo it without
+                  switching to Cards. */}
+              {[...selected].some((sym) => candidates.find((e) => e.symbol === sym)?.mutedUntil) && (
+                <button
+                  onClick={() => runBulk(() => bulkSnooze([...selected], null), `Unmuted ${selected.size}`)}
+                  className="inline-flex items-center gap-1 rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:border-gray-400"
+                >
+                  <Bell className="h-3 w-3" /> Unmute
+                </button>
+              )}
               <select
                 defaultValue=""
                 onChange={(e) => {
                   const cat = e.target.value as WatchlistCategoryName;
                   if (!cat) return;
-                  runBulk(() => bulkSetCategory([...selected], cat), `Moved ${selected.size} to ${CATEGORY_META[cat].label}`);
+                  runBulk(() => bulkSetCategory([...selected], cat), `${selected.size} set to ${CATEGORY_META[cat].label}`);
                   e.target.value = '';
                 }}
+                title="Review cadence — how often this stock deserves a look"
                 className="rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-300"
               >
-                <option value="">Move to…</option>
+                <option value="">Set category…</option>
                 {CATEGORY_ORDER.map((c) => (
                   <option key={c} value={c}>{CATEGORY_META[c].label}</option>
                 ))}
@@ -602,8 +663,17 @@ export default function WatchlistView() {
             </div>
           )}
 
+          {layout === 'table' && (
+            <TableControls
+              timeframe={timeframe} onTimeframe={setTimeframe}
+              currency={currency} onCurrency={setCurrency}
+              groupBySector={groupBySector} onGroupBySector={setGroupBySector}
+              fxAsOf={fx.asOf}
+            />
+          )}
+
           {filtered.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-gray-700 p-6 text-center text-sm text-gray-500">
+            <p className="surface-quiet p-6 text-center text-sm muted">
               No items match this filter.
             </p>
           ) : layout === 'table' ? (
@@ -611,6 +681,11 @@ export default function WatchlistView() {
               <WatchlistTable
                 entries={filtered}
                 view={tableView}
+                customCols={customCols}
+                timeframe={timeframe}
+                currency={currency}
+                fxRates={fx.rates}
+                groupBySector={groupBySector}
                 compact={prefs.compact}
                 selected={selected}
                 onToggle={toggleOne}
@@ -644,7 +719,7 @@ export default function WatchlistView() {
           <Reveal>
             <section>
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-400">Watchlist averages</h2>
-              <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-gray-700 bg-gray-700 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <Stat label="Avg 1D change" value={avgChange == null ? '—' : fmtPct(avgChange)}
                       tone={avgChange == null ? undefined : avgChange >= 0 ? 'up' : 'down'} />
                 <Stat label="Combined market cap" value={fmtMarketCap(totalCap || null)} />
@@ -656,6 +731,18 @@ export default function WatchlistView() {
           </Reveal>
         </>
       )}
+
+      {/* Below the list, not above it: the stocks are what you came for, and
+          these three read the active list — putting them over the tab strip
+          meant the numbers changed from a control further down the page. */}
+      <div id="updates" className="scroll-mt-4 print:hidden">
+        {listDigest && (
+          <SinceYouLeft digest={listDigest} deviceId={deviceId} onReviewed={load} onItemChange={load} />
+        )}
+      </div>
+
+      {candidates.length > 0 && <ThesisHealth entries={candidates} />}
+      {candidates.length > 0 && <Concentration entries={candidates} />}
     </div>
   );
 }
@@ -664,7 +751,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: 'up
   const color =
     tone === 'up' ? 'text-green-500' : tone === 'down' ? 'text-red-500' : tone === 'warn' ? 'text-amber-400' : 'text-gray-100';
   return (
-    <div className="bg-gray-800 p-4">
+    <div className="surface-sunken">
       <div className={`text-lg font-semibold tabular-nums ${color}`}>{value}</div>
       <div className="text-xs text-gray-500">{label}</div>
     </div>

@@ -31,7 +31,7 @@ export default function SteelmanButton({ symbol, direction }: { symbol: string; 
 
   if (points) {
     return (
-      <div className="rounded-lg border border-gray-700 bg-gray-900/40 p-3">
+      <div className="surface-sunken">
         <div className="flex items-center justify-between gap-2">
           <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
             <Swords className="h-3.5 w-3.5" /> The other side
@@ -48,7 +48,7 @@ export default function SteelmanButton({ symbol, direction }: { symbol: string; 
             </li>
           ))}
         </ul>
-        <p className="mt-2 border-t border-gray-800 pt-2 text-[10px] leading-relaxed text-gray-600">
+        <p className="mt-2 border-t hairline pt-2 text-[10px] leading-relaxed text-gray-600">
           Generated from your thesis alone &mdash; no live market data. Anything here that depends on
           current conditions needs checking. Not advice.
         </p>
@@ -61,7 +61,7 @@ export default function SteelmanButton({ symbol, direction }: { symbol: string; 
       onClick={run}
       disabled={loading}
       title="Pressure-test your reasoning against the strongest opposing case"
-      className="inline-flex items-center gap-1.5 rounded-md border border-gray-700 px-2.5 py-1 text-xs text-gray-400 transition-colors hover:border-gray-500 hover:text-gray-200 disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-1 text-xs text-gray-400 transition-colors hover:border-gray-500 hover:text-gray-200 disabled:opacity-50"
     >
       {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Swords className="h-3.5 w-3.5" />}
       {loading ? 'Thinking…' : label}

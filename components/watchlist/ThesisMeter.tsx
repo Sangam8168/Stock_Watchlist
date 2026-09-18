@@ -1,6 +1,6 @@
 'use client';
 
-import { fmtPrice } from '@/lib/changes/display';
+import { fmtPrice, currencyOf } from '@/lib/changes/display';
 
 /**
  * A one-glance "where does price sit vs. my plan" bar.
@@ -9,6 +9,7 @@ import { fmtPrice } from '@/lib/changes/display';
  */
 export default function ThesisMeter({ entry }: { entry: WatchlistEntry }) {
   const { price, entryLow, entryHigh, invalidationPrice, targetPrice, direction } = entry;
+  const ccy = currencyOf(entry.symbol, entry.currency);
   if (price == null || entryLow == null || entryHigh == null) return null;
 
   // Confidence decay. A thesis you wrote three months ago and haven't re-read is
@@ -57,13 +58,13 @@ export default function ThesisMeter({ entry }: { entry: WatchlistEntry }) {
         <div
           className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded bg-gray-100"
           style={{ left: pct(price) }}
-          title={`Now ${fmtPrice(price)}`}
+          title={`Now ${fmtPrice(price, ccy)}`}
         />
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-gray-600">
-        <span>{fmtPrice(lo + pad)}</span>
-        <span className="text-gray-400">now {fmtPrice(price)}</span>
-        <span>{fmtPrice(hi - pad)}</span>
+        <span>{fmtPrice(lo + pad, ccy)}</span>
+        <span className="text-gray-400">now {fmtPrice(price, ccy)}</span>
+        <span>{fmtPrice(hi - pad, ccy)}</span>
       </div>
       {age >= 30 && (
         <p className="mt-1 text-[10px] text-amber-500/80" title="Levels you set a while ago may no longer reflect the setup">

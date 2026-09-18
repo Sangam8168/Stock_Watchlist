@@ -6,9 +6,11 @@ import { toast } from 'sonner';
 import { Pencil, Trash2, AlertTriangle, Clock, BellOff, Bell } from 'lucide-react';
 import ThesisDialog from '@/components/watchlist/ThesisDialog';
 import ThesisMeter from '@/components/watchlist/ThesisMeter';
+import DataConfidence from '@/components/watchlist/DataConfidence';
 import Sparkline from '@/components/watchlist/Sparkline';
 import { removeFromWatchlist, markSeen, snoozeWatchlistItem, bulkMoveToList } from '@/lib/actions/watchlist.actions';
-import { fmtPrice, fmtPct, fmtMarketCap, severityTier, TIER_META, timeAgo } from '@/lib/changes/display';
+import { fmtPrice, fmtPct, fmtMarketCap, severityTier, TIER_META, timeAgo, currencyOf } from '@/lib/changes/display';
+import { exchangeOf } from '@/lib/changes/exchange';
 
 const SNOOZE_OPTIONS: { label: string; days: number }[] = [
   { label: '1 week', days: 7 },
@@ -30,6 +32,11 @@ export default function WatchlistRow({
 }) {
   const [pending, startTransition] = useTransition();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+
+  // An NSE listing is quoted in rupees. Printing that with a dollar sign would
+  // be the most visible lie this app could tell, so the symbol decides.
+  const ccy = currencyOf(entry.symbol, entry.currency);
+  const venue = exchangeOf(entry.symbol);
 
   const act = (fn: () => Promise<unknown>, msg?: string) =>
     startTransition(async () => {
@@ -55,7 +62,7 @@ export default function WatchlistRow({
   const muted = entry.mutedUntil != null;
 
   return (
-    <div className={`rounded-lg border bg-gray-800 p-4 ${muted ? 'border-gray-800 opacity-70' : 'border-gray-700'}`}>
+    <div className={`surface ${muted ? 'opacity-60' : ''}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -90,8 +97,8 @@ export default function WatchlistRow({
 
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
             {entryLabel && <span className={dist === 0 ? 'text-yellow-500' : ''}>{entryLabel}</span>}
-            {entry.invalidationPrice != null && <span>invalidation {fmtPrice(entry.invalidationPrice)}</span>}
-            {entry.targetPrice != null && <span>target {fmtPrice(entry.targetPrice)}</span>}
+            {entry.invalidationPrice != null && <span>invalidation {fmtPrice(entry.invalidationPrice, ccy)}</span>}
+            {entry.targetPrice != null && <span>target {fmtPrice(entry.targetPrice, ccy)}</span>}
             {entry.catalystTradingDays != null && entry.catalystTradingDays <= 15 && (
               <span className={entry.catalystTradingDays <= 5 ? 'text-amber-400' : ''}>
                 {entry.catalystNote || 'catalyst'} in {entry.catalystTradingDays}d
@@ -102,6 +109,10 @@ export default function WatchlistRow({
           </div>
 
           <ThesisMeter entry={entry} />
+
+          <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+            <DataConfidence entry={entry} />
+          </div>
 
           {(entry.stale || entry.unconfirmedFields.length > 0) && (
             <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
@@ -121,14 +132,17 @@ export default function WatchlistRow({
         </div>
 
         <div className="flex flex-col items-end gap-1">
-          <div className="text-base font-semibold text-gray-100">{fmtPrice(entry.price)}</div>
+          <div className="text-base font-semibold text-gray-100">{fmtPrice(entry.price, ccy)}</div>
+          {venue.id !== 'US' && (
+            <div className="text-[10px] uppercase tracking-wide text-gray-600">{venue.label}</div>
+          )}
           <div className={`text-sm ${changeColor}`}>{fmtPct(entry.changePercent)}</div>
           <Sparkline data={entry.priceHistory} />
         </div>
       </div>
 
       {entry.unseenCount > 0 && !muted && (
-        <div className="mt-3 rounded-md bg-gray-900/60 p-3">
+        <div className="surface-sunken mt-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-gray-400">
               {entry.unseenCount} update{entry.unseenCount === 1 ? '' : 's'} since you last reviewed
