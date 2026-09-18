@@ -4,7 +4,7 @@ import {sendNewsSummaryEmail, sendWelcomeEmail, sendWatchlistDigestEmail} from "
 import {getAllUsersForNewsEmail, getUserContactById} from "@/lib/actions/user.actions";
 import {buildUserDigest} from "@/lib/watchlist/digest";
 import {activeUserIdPages} from "@/lib/watchlist/digest-dispatch";
-import { getWatchlistSymbolsByEmail } from "@/lib/actions/watchlist.actions";
+import { symbolsForEmail } from "@/lib/watchlist/users";
 import { getNews } from "@/lib/actions/finnhub.actions";
 import { getFormattedTodayDate } from "@/lib/utils";
 import { getDistinctWatchedSymbols, refreshSymbols, flagStaleTheses } from "@/lib/watchlist/pipeline";
@@ -67,7 +67,7 @@ export const sendDailyNewsSummary = inngest.createFunction(
             const perUser: Array<{ user: UserForNewsEmail; articles: MarketNewsArticle[] }> = [];
             for (const user of users as UserForNewsEmail[]) {
                 try {
-                    const symbols = await getWatchlistSymbolsByEmail(user.email);
+                    const symbols = await symbolsForEmail(user.email);
                     let articles = await getNews(symbols);
                     // Enforce max 6 articles per user
                     articles = (articles || []).slice(0, 6);

@@ -9,7 +9,7 @@ import { Watchlist } from '@/database/models/watchlist.model';
 import { ChangeEventModel } from '@/database/models/changeEvent.model';
 import { SymbolEventModel } from '@/database/models/symbolEvent.model';
 import { WatchedSymbolModel } from '@/database/models/watchedSymbol.model';
-import { buildSnapshot } from '@/lib/actions/market-data.actions';
+import { buildSnapshot } from '@/lib/market-data/snapshot';
 import { detectChanges, volatilityFromChanges, type DetectedChange, type ChangeKind } from '@/lib/changes/detect';
 import { tradingDaysUntil } from '@/lib/market';
 import { log } from '@/lib/observability/logger';

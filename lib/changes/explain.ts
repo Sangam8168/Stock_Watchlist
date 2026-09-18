@@ -62,7 +62,8 @@ const BASE: Record<string, { points: number; note: string }> = {
   new_52w_low: { points: 52, note: 'a year-long floor gave way' },
   new_52w_high: { points: 50, note: 'a year-long ceiling gave way' },
   corporate_action: { points: 45, note: 'the share count changed, so every price before today means something different' },
-  news_break: { points: 40, note: 'fresh coverage, no price move yet' },
+  valuation_shift: { points: 40, note: 'the multiple re-rated without a matching price move' },
+
   approaching_52w_low: { points: 38, note: 'a heads-up while you can still act, not a fact' },
   approaching_52w_high: { points: 35, note: 'a heads-up while you can still act, not a fact' },
   thesis_stale: { points: 15, note: 'nothing happened — you simply have not re-read this in a while' },
@@ -105,11 +106,18 @@ export function explainSeverity(event: {
         note: `${days} trading day${days === 1 ? '' : 's'} away — the nearer it is, the louder`,
       });
     }
-  } else if (event.type === 'valuation_shift') {
-    const pct = Math.abs(num(d.changePct) ?? num(d.extra) ?? 0);
-    factors.push({ label: 'Valuation moved', points: 30, note: 'the multiple re-rated without a matching price move' });
-    if (pct > 0) {
-      factors.push({ label: 'Size of the re-rating', points: Math.min(25, pct * 4), note: `${pct.toFixed(1)}%, capped at 25` });
+  } else if (event.type === 'news_break') {
+    // 30 + min(25, added * 4), where `added` is the new-article count the
+    // detector capped at 12 before scoring.
+    const added = num(d.added) ?? 0;
+    const counted = Math.min(added, 12);
+    factors.push({ label: 'Fresh coverage appeared', points: 30, note: 'news the engine had not seen before' });
+    if (counted > 0) {
+      factors.push({
+        label: 'How much of it',
+        points: Math.min(25, counted * 4),
+        note: `${added} new article${added === 1 ? '' : 's'}, counted up to 12 and capped at 25`,
+      });
     }
   } else {
     const base = BASE[event.type];
